@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 from . import legacy_core as core
 from .settings import validate_settings
-from .storage import Delivery, History, Reporter, WorkerLock, check_writable
+from .storage import Delivery, History, Reporter, WorkerLock, check_destination, check_writable
 from .mail_queue import MailQueue
 
 
@@ -250,8 +250,11 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
         ))
         if not scan_only:
             for folder in folders:
-                check_writable(folder)
-        reporter.emit(1, "stage_complete", "ตรวจสิทธิ์ Log และปลายทางที่เลือกผ่าน")
+                check_destination(folder)
+        reason = "ตรวจสิทธิ์เขียน Log ผ่าน"
+        if not scan_only:
+            reason += " และเปิดอ่านปลายทางได้; ไม่สร้างไฟล์ทดสอบ สิทธิ์บันทึกตรวจตอนดาวน์โหลดจริง"
+        reporter.emit(1, "stage_complete", reason)
         delivery = Delivery(history, reporter)
         with tempfile.TemporaryDirectory(prefix="kde-v3-") as temporary:
             engine_settings = make_engine_settings(settings, Path(temporary) / "engine-state.json")

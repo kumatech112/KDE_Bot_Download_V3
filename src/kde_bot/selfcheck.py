@@ -17,6 +17,38 @@ from .settings import atomic_json, default_settings, load_settings, save_setting
 from .storage import Delivery, History, Reporter, WorkerLock
 
 
+def check_destination_preflight(root: Path) -> None:
+    """Run the real preflight while denying all writes in business destinations."""
+    from .workflow import run_cycle
+
+    settings = default_settings()
+    destinations = set()
+    for key in ("original_dir", "new_dir", "log_dir"):
+        folder = root / ("preflight-" + key)
+        folder.mkdir()
+        settings[key] = str(folder)
+        if key != "log_dir":
+            destinations.add(folder)
+            (folder / "business-file.gpg").write_bytes(b"offline existing file")
+    original_open = Path.open
+    attempted_writes = []
+
+    def guarded_open(path: Path, mode="r", *args, **kwargs):
+        if path.parent in destinations and any(flag in mode for flag in ("w", "a", "x", "+")):
+            attempted_writes.append(path)
+            raise AssertionError(f"Permission probe attempted to write in destination: {path}")
+        return original_open(path, mode, *args, **kwargs)
+
+    events = []
+    with patch.object(Path, "open", guarded_open):
+        run_cycle(settings, threading.Event(), events.append, retry_only=True)
+    assert attempted_writes == []
+    for folder in destinations:
+        assert {path.name for path in folder.iterdir()} == {"business-file.gpg"}
+        assert (folder / "business-file.gpg").read_bytes() == b"offline existing file"
+    assert any("สิทธิ์บันทึกตรวจตอนดาวน์โหลดจริง" in event["reason"] for event in events)
+
+
 def check_flat_storage(root: Path) -> None:
     """Exercise both account deliveries without creating account subdirectories."""
     from .workflow import selected_folders
@@ -229,6 +261,8 @@ def run_self_check(output: Path) -> int:
             result["checks"].append("Packaged Outlook scanner: skip Notes, scan mail children, recover rejected UnRead filter, ignore read/non-mail items; fake COM only")
             check_flat_storage(root)
             result["checks"].append("Two concurrent accounts store verified files directly in shared destination roots; legacy account subfolders ignored in all three modes")
+            check_destination_preflight(root)
+            result["checks"].append("Destination preflight creates no probe files and succeeds with business-folder writes denied; existing files preserved; Log probe retained")
         result["status"] = "passed"
         exit_code = 0
     except Exception as error:

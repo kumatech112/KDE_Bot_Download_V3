@@ -1,4 +1,14 @@
-# KDE Bot Download V3 — 3.1.3
+# KDE Bot Download V3 — 3.1.4
+
+- Remove synthetic permission-test files from business download destinations.
+- Check destination existence and directory readability without creating, modifying or deleting files.
+- Keep the mutable Log-folder write/delete probe and report that actual destination save rights are checked during real delivery.
+- Preserve no-overwrite safeguards, atomic business-file staging, flat storage and all mail/session rules.
+- Verify both diagnostics and copy-only startup in all storage modes with destination writes denied; preserve actual save errors and unreadable/missing-folder failures.
+
+Short commit message: fix: avoid permission probes in KDE download folders
+
+## 3.1.3
 
 - Store both Pre/Post account downloads directly in the selected shared destination roots.
 - Remove account-specific folder controls and discard old account folder overrides on settings load/save/import.

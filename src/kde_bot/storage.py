@@ -70,7 +70,19 @@ class WorkerLock:
                 self.stream = None
 
 
+def check_destination(folder: Path) -> None:
+    """Check a business destination without creating, changing or deleting files."""
+    if not folder.is_dir():
+        raise FileNotFoundError(f"ไม่พบโฟลเดอร์ปลายทางหรือไม่มีสิทธิ์เข้าถึง: {folder}")
+    try:
+        with os.scandir(folder) as entries:
+            next(entries, None)
+    except PermissionError as error:
+        raise PermissionError(f"ไม่มีสิทธิ์อ่านรายการไฟล์ในปลายทาง: {folder}") from error
+
+
 def check_writable(folder: Path) -> None:
+    """Probe the mutable Log folder only; never use on business destinations."""
     if not folder.is_dir():
         raise FileNotFoundError(f"ไม่พบโฟลเดอร์หรือไม่มีสิทธิ์เข้าถึง: {folder}")
     probe = folder / f".kde-check-{uuid.uuid4().hex}.tmp"

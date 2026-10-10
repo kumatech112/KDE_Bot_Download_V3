@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kde_bot.storage import Delivery, History, Reporter, WorkerLock, record_key
+from kde_bot.storage import Delivery, History, Reporter, WorkerLock, check_destination, record_key
 
 
 @pytest.fixture
@@ -60,19 +60,35 @@ def test_single_new_destination_can_copy_original(delivery_context):
     assert (second / filename).read_bytes() == b"already downloaded"
 
 
-def test_download_timeout_reports_step_six_and_preserves_other_files(delivery_context):
+@pytest.mark.parametrize("failure", [TimeoutError("KDE browser download timed out"),
+                                    PermissionError("business file save denied")])
+def test_download_failure_reports_step_six_and_preserves_other_files(delivery_context, failure):
     delivery, _, events, (first, second, _) = delivery_context
     untouched = first / "unrelated.txt"
     untouched.write_bytes(b"preserve")
 
     def failed_download(_path):
-        raise TimeoutError("KDE browser download timed out")
+        raise failure
 
     assert delivery.deliver("account", "A1015_TEST_09102026.zip.gpg",
                             [first, second], failed_download) == "error"
     assert events[-1]["step"] == 6
-    assert "TimeoutError" in events[-1]["reason"]
+    assert type(failure).__name__ in events[-1]["reason"]
     assert untouched.read_bytes() == b"preserve"
+
+
+def test_destination_check_preserves_folder_access_denial(tmp_path):
+    with patch("kde_bot.storage.os.scandir", side_effect=PermissionError("read denied")):
+        with pytest.raises(PermissionError, match="ไม่มีสิทธิ์อ่านรายการไฟล์"):
+            check_destination(tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_destination_check_does_not_create_missing_folder(tmp_path):
+    missing = tmp_path / "missing"
+    with pytest.raises(FileNotFoundError, match="ไม่พบโฟลเดอร์ปลายทาง"):
+        check_destination(missing)
+    assert not missing.exists()
 
 
 def test_empty_existing_file_is_not_overwritten(delivery_context):

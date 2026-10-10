@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -143,3 +145,37 @@ def test_pending_copy_recovery_uses_roots_without_recreating_deleted_account_fol
     record = History(tmp_path / "log_dir").data["files"][record_key(account["username"], filename)]
     assert record["pending"] == []
     assert set(record["destinations"]) == {settings["original_dir"], settings["new_dir"]}
+
+
+@pytest.mark.parametrize("mode", ["both", "original", "new"])
+@pytest.mark.parametrize("check_only", [True, False])
+def test_destination_preflight_never_opens_test_files_for_writing(tmp_path, monkeypatch, mode, check_only):
+    from kde_bot.workflow import StructuredDownloader
+    settings = default_settings()
+    settings["storage_mode"] = mode
+    destinations = set()
+    for key in ("original_dir", "new_dir", "log_dir"):
+        folder = tmp_path / key
+        folder.mkdir()
+        settings[key] = str(folder)
+        if key != "log_dir":
+            destinations.add(folder)
+            (folder / "business-file.gpg").write_bytes(b"preserve existing download")
+    original_open = Path.open
+    attempted_destination_writes = []
+
+    def guarded_open(path, mode="r", *args, **kwargs):
+        if path.parent in destinations and any(flag in mode for flag in ("w", "a", "x", "+")):
+            attempted_destination_writes.append(path)
+            raise AssertionError(f"Destination preflight attempted to create a file: {path}")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    monkeypatch.setattr(StructuredDownloader, "_browser_launch_kwargs", lambda _self: {"executable_path": sys.executable})
+    events = []
+    run_cycle(settings, threading.Event(), events.append, check_only=check_only, retry_only=not check_only)
+    assert attempted_destination_writes == []
+    for folder in destinations:
+        assert {path.name for path in folder.iterdir()} == {"business-file.gpg"}
+        assert (folder / "business-file.gpg").read_bytes() == b"preserve existing download"
+    assert any("สิทธิ์บันทึกตรวจตอนดาวน์โหลดจริง" in event["reason"] for event in events)

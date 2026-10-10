@@ -1,8 +1,11 @@
-# Verification — 2026-10-10 — 3.1.3
+# Verification — 2026-10-10 — 3.1.4
 
 ## Completed checks
 
-- 85 regression tests and 4 subtests passed after the implementation changes.
+- 94 regression tests and 4 subtests passed after the implementation changes.
+- Diagnostic and copy-only preflight passed with all business-destination file writes rejected, across all three storage modes; no test files were created and existing files retained their contents.
+- Missing/unreadable destinations still failed explicitly without creating directories or files.
+- Actual download PermissionError remained a step-six error without modifying existing business files.
 - Old V3 account-folder overrides are dropped on load/import/save while global roots, credentials and enabled-account choices survive.
 - Legacy combined configuration imports only KDE and does not restore the former account download folders.
 - Both accounts select identical roots in all three storage modes, even when raw legacy overrides are supplied.
@@ -38,6 +41,7 @@
 - Preserved date/account matching, ambiguity protection, split-volume, DPAPI, conflict and copy-recovery regressions passed.
 - Corrupt shared mail state failed without resetting its original file.
 - Actual packaged EXE passed its offline self-check, including two concurrent real browser processes with isolated cookies.
+- Actual packaged preflight passed with destination file writes rejected; no probe files were created, existing file contents were unchanged, and Log remained writable.
 - Actual packaged flat-storage check delivered both account files at both roots, verified their bytes, and confirmed no account subdirectories in all three modes.
 - Actual packaged scanner passed the Notes-folder and rejected-filter reproduction using fake COM, including child traversal and unchanged unread flags.
 - Actual packaged Thai GUI passed and was visually checked: chronological work history, mail queue, accessible Settings and no theme selector.
@@ -50,7 +54,7 @@
 
 portable/KDE Bot Download V3.exe
 
-SHA-256: 0aefe9a74c4634db53d69e3fa5256dff697de70a12412fc505913e91882e9be6
+SHA-256: d3316e1d506953a1199b846765024384ed4c82bc06a5724d031a1c13d7580637
 
 Only EXE, _internal and the Thai manual are distributed. Raw reports/screenshots stay under docs/verification and are excluded from Git.
 
@@ -62,7 +66,7 @@ Build tools now require at least 1 GiB free and support KDE_BUILD_HOME for a loc
 Tests ran on 10.0.0.73, opening the executable stored on 10.0.0.97.
 Execution under the Windows user on 10.0.0.97, that user's share permissions/Outlook profile, and live KDE login/download/logout remain unverified.
 The user's screenshot identifies the failing Notes-folder condition on .97. Regression and packaged Outlook-filter checks use fake COM folders, not that machine's live mailbox.
-The user's later screenshot identifies a denied temporary-file write at the .243 destination root. Flat storage still requires that user's root write access; this release does not change SMB/Windows permissions. The deleted 01 Pre/02 Post directories are not recreated, and existing business files are not relocated.
+The user's later screenshot and report identify Permission denied involving a .kde-check probe at the .243 destination root. The generic error does not establish whether creation, writing or cleanup was denied on .97. Version 3.1.4 removes that probe from business destinations. Actual file delivery still requires the necessary Windows/SMB access and is not verified on .97. Deleted 01 Pre/02 Post directories are not recreated, existing business files are not relocated, and old probe leftovers are not removed automatically.
 No live production download, credential deployment, business-file overwrite or modification of another application was performed.
 
 The monitor polls Outlook locally every 15 seconds; it is not a server webhook. Portal sessions only start for eligible queued mail. First observation includes previously unprocessed unread messages.
