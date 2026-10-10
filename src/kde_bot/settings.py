@@ -32,8 +32,10 @@ def default_settings() -> dict[str, Any]:
         "search_days": 1,
         "max_pages": 50,
         "download_delay_seconds": 5,
-        "busy_wait_seconds": 900,
-        "loop_wait_seconds": 1200,
+        "mail_poll_seconds": 15,
+        "mail_delay_seconds": 180,
+        "login_retry_seconds": 300,
+        "max_session_attempts": 2,
         "page_timeout_seconds": 60,
         "accounts": [
             {"label": "01 Pre", "username": "", "password": "", "enabled": True, "original_dir": ""},
@@ -114,6 +116,11 @@ def normalize_settings(raw: dict[str, Any]) -> dict[str, Any]:
     })
     result["mail_watch"]["unread_only"] = True
     result["mail_watch"]["include_subject"] = True
+    # Mail is mandatory in this release; old timers never start portal sessions.
+    result["mail_watch"]["enabled"] = True
+    result["mail_delay_seconds"] = 180
+    result["login_retry_seconds"] = 300
+    result["max_session_attempts"] = 2
     result["version"] = 3
     if "accounts" in raw:
         if not isinstance(raw["accounts"], list) or len(raw["accounts"]) > 2:
@@ -171,10 +178,10 @@ def import_settings(path: Path) -> tuple[dict[str, Any], list[str]]:
 def validate_settings(settings: dict[str, Any], require_credentials: bool = True) -> None:
     if settings["storage_mode"] not in {"both", "original", "new"}:
         raise ValueError("กรุณาเลือกวิธีเก็บไฟล์")
-    for key in ("loop_wait_seconds", "page_timeout_seconds", "max_pages", "search_days"):
+    for key in ("page_timeout_seconds", "max_pages", "search_days"):
         if not isinstance(settings[key], int) or settings[key] < 1:
             raise ValueError(f"{key}: ต้องเป็นจำนวนเต็มมากกว่า 0")
-    for key in ("download_delay_seconds", "busy_wait_seconds"):
+    for key in ("download_delay_seconds",):
         if not isinstance(settings[key], int) or settings[key] < 0:
             raise ValueError(f"{key}: ต้องเป็นจำนวนเต็มตั้งแต่ 0")
     for key in ("log_dir", "original_dir", "new_dir"):
@@ -198,6 +205,12 @@ def validate_settings(settings: dict[str, Any], require_credentials: bool = True
         if not str(settings[key]).startswith("https://"):
             raise ValueError(f"{key}: ต้องใช้ HTTPS")
     mail = settings["mail_watch"]
+    if not mail["enabled"]:
+        raise ValueError("เวอร์ชันนี้ต้องใช้อีเมลเป็นตัวเริ่มงาน KDE")
+    if settings["mail_delay_seconds"] != 180 or settings["login_retry_seconds"] != 300 or settings["max_session_attempts"] != 2:
+        raise ValueError("นโยบาย: หน่วงเมล 180 วินาที รอ Login 300 วินาที และไม่เกิน 2 ครั้งรวมครั้งแรก")
+    if not isinstance(settings["mail_poll_seconds"], int) or settings["mail_poll_seconds"] < 5:
+        raise ValueError("รอบตรวจ Outlook ต้องไม่น้อยกว่า 5 วินาที")
     for key in ("max_messages_per_folder", "max_body_chars"):
         if not isinstance(mail[key], int) or mail[key] < 1:
             raise ValueError(f"{key}: ต้องเป็นจำนวนเต็มมากกว่า 0")

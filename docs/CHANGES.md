@@ -1,25 +1,20 @@
-# KDE Bot Download V3 — 3.0.0
+# KDE Bot Download V3 — 3.1.0
 
-## Changes
+- Replace serial scheduled account loops with a durable mail queue.
+- Remove the old loop entrypoints and timer controls; Outlook polling performs no portal operations.
+- Wait 180 seconds after first observing each qualifying unread message.
+- Run up to two independent browser processes, one per account, with isolated cookies and Playwright runtimes.
+- Route definite Pre/Post mail to its account; ambiguous-side mail checks both enabled accounts.
+- Retry missing/failed downloads in a fresh session, with two attempts total.
+- After login failure, enforce a durable 300-second account cooldown, including new mail.
+- Retain processed IDs/attempts across restarts; recover interrupted work without resetting budgets.
+- Add explicit manual failed-mail retry; no automatic retry after exhaustion.
+- Repair pending copies without a portal session; preserve verified delivery to the selected destinations.
+- Add a mail queue, per-account progress, live counts and missing-file reasons to the Thai plain ttk GUI.
+- Synchronize JSON/CSV and equivalent filenames while allowing different files to download concurrently.
+- Preserve machine-specific DPAPI credentials and existing V3 download history.
+- Replace the previous portable release after the replacement passes actual EXE checks.
 
-- New KDE-only portable application in a separate V3 project.
-- Plain Thai Version 1 style ttk GUI, no theme switcher.
-- Three storage modes: both, original only, new only.
-- Original destination \\10.0.0.243\pgp-data$; new \\10.0.0.97\Z Bot KDE.
-- Copy after a single download, SHA-256 verification, no conflicting-file overwrite.
-- Per-file pending-copy recovery without downloading the source again.
-- Step 1–8 results, separate Complete/Error/Skipped tables, stable rows across retries.
-- Monthly CSV plus shared history; remove per-run audit folders and duplicate archive copies.
-- Machine/user-specific encrypted credentials; unreadable passwords leave Settings accessible.
-- Explicit import of legacy KDE settings/history and environment/Outlook checks.
-- Source, portable, tools, tests, and documentation separated.
+Changed files/functions are mapped in ARCHITECTURE.md. Deployment limits are recorded in VERIFICATION.md.
 
-## Compatibility
-
-Existing applications, their configuration and business files are not modified.
-Existing matching rules and login/logout engine are reused from the standalone Version 1 application.
-The only modification to the preserved engine is an optional file-delivery callback after matching.
-
-## Short commit message
-
-feat: rebuild KDE downloader with verified delivery and step reporting
+Short commit message: feat: trigger KDE downloads from mail with concurrent accounts

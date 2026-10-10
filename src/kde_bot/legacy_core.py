@@ -32,6 +32,9 @@ except Exception:
 
 
 LogFn = Callable[[str], None]
+_driver_launch_lock = threading.Lock()
+_driver_launch_users = 0
+_driver_launch_original = None
 
 
 KNOWN_FILE_EXTENSION_PATTERN = re.compile(
@@ -106,22 +109,33 @@ def default_log(message: str) -> None:
 
 @contextmanager
 def sync_playwright_without_console(log: LogFn):
-    original_create_subprocess_exec = asyncio.create_subprocess_exec
+    global _driver_launch_users, _driver_launch_original
+    # Install a single reference-counted wrapper. Independent workers may overlap
+    # and finish in either order without restoring another worker's wrapper.
+    with _driver_launch_lock:
+        if _driver_launch_users == 0:
+            original_create_subprocess_exec = asyncio.create_subprocess_exec
+            _driver_launch_original = original_create_subprocess_exec
 
-    async def create_subprocess_without_console(program: Any, *args: Any, **kwargs: Any) -> Any:
-        executable_name = Path(str(program)).name.lower()
-        if os.name == "nt" and executable_name == "node.exe":
-            create_no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
-            kwargs["creationflags"] = int(kwargs.get("creationflags", 0)) | create_no_window
-        return await original_create_subprocess_exec(program, *args, **kwargs)
+            async def create_subprocess_without_console(program: Any, *args: Any, **kwargs: Any) -> Any:
+                executable_name = Path(str(program)).name.lower()
+                if os.name == "nt" and executable_name == "node.exe":
+                    create_no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+                    kwargs["creationflags"] = int(kwargs.get("creationflags", 0)) | create_no_window
+                return await original_create_subprocess_exec(program, *args, **kwargs)
 
-    asyncio.create_subprocess_exec = create_subprocess_without_console
+            asyncio.create_subprocess_exec = create_subprocess_without_console
+        _driver_launch_users += 1
     try:
         log("Playwright: เริ่ม Node driver แบบไม่แสดงหน้าต่าง Console")
         with sync_playwright() as playwright:
             yield playwright
     finally:
-        asyncio.create_subprocess_exec = original_create_subprocess_exec
+        with _driver_launch_lock:
+            _driver_launch_users -= 1
+            if _driver_launch_users == 0:
+                asyncio.create_subprocess_exec = _driver_launch_original
+                _driver_launch_original = None
 
 
 def load_settings(path: str | Path = "config.json") -> Settings:
@@ -1031,44 +1045,6 @@ class KdeDownloader:
         primary_page.on("dialog", dismiss_dialog)
         context.on("page", close_popup)
 
-    def run_once(self) -> dict[str, int]:
-        summary = {"accounts": 0, "downloaded": 0, "skipped": 0, "not_requested": 0, "errors": 0}
-        self.mail_filename_lookup = None
-        if self.settings.mail_watch.enabled:
-            self.mail_filename_lookup = self.scan_mail_filenames()
-            self.log(f"Mail Watch: พบชื่อไฟล์จากเมลวันนี้ {len(self.mail_filename_lookup)} รายการ")
-        for account in self.settings.accounts:
-            if self.stop_event and self.stop_event.is_set():
-                break
-            if not account.enabled:
-                continue
-            summary["accounts"] += 1
-            try:
-                result = self.process_account(account)
-                summary["downloaded"] += result.get("downloaded", 0)
-                summary["skipped"] += result.get("skipped", 0)
-                summary["not_requested"] += result.get("not_requested", 0)
-            except Exception as exc:
-                summary["errors"] += 1
-                self.log(f"{account.label}: ERROR {type(exc).__name__}: {exc}")
-        save_state(self.settings.state_file, self.state)
-        return summary
-
-    def run_loop(self) -> None:
-        cycle = 1
-        while not (self.stop_event and self.stop_event.is_set()):
-            self.log(f"เริ่มรอบที่ {cycle}")
-            summary = self.run_once()
-            self.log(
-                "จบรอบที่ "
-                f"{cycle}: accounts={summary['accounts']} downloaded={summary['downloaded']} "
-                f"skipped={summary['skipped']} not_requested={summary['not_requested']} errors={summary['errors']}"
-            )
-            cycle += 1
-            if not wait_or_stop(self.settings.loop_wait_seconds, self.stop_event, self.log, "รอก่อนวนรอบใหม่"):
-                break
-        self.log("หยุด loop แล้ว")
-
     def process_account(self, account: Account) -> dict[str, int]:
         account.download_dir.mkdir(parents=True, exist_ok=True)
         self.state.setdefault("downloaded", {}).setdefault(account.username, {})
@@ -1136,6 +1112,8 @@ class KdeDownloader:
 
         start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         lookup: dict[str, str] = {}
+        current_mail_lookup: dict[str, str] = {}
+        self.mail_messages: list[dict[str, Any]] = []
         stats = {
             "roots": 0,
             "folders": 0,
@@ -1215,6 +1193,7 @@ class KdeDownloader:
             if not key:
                 return
             display = f"{display_name} [{source_label}]"
+            current_mail_lookup[key] = display
             if key not in lookup:
                 lookup[key] = display
 
@@ -1467,6 +1446,7 @@ class KdeDownloader:
                 if len(unread_subject_examples) < 10:
                     unread_subject_examples.append(source_label)
                 before_keys = len(lookup)
+                current_mail_lookup.clear()
                 try:
                     if settings.include_subject:
                         add_from_text(subject, f"Subject: {source_label}", allow_text_keys=True)
@@ -1515,6 +1495,23 @@ class KdeDownloader:
                                 add_subject_aliases(line, source_label)
                     except Exception:
                         pass
+                if current_mail_lookup:
+                    # Expose each message separately, including duplicate filenames.
+                    # Outlook mail is never marked read or modified by this scanner.
+                    try:
+                        entry_id = str(item.EntryID or "")
+                    except Exception:
+                        entry_id = ""
+                    try:
+                        store_id = str(folder.StoreID or "")
+                    except Exception:
+                        store_id = ""
+                    self.mail_messages.append({
+                        "entry_id": entry_id, "store_id": store_id,
+                        "received": received.isoformat() if received else "",
+                        "subject": subject, "lookup": dict(current_mail_lookup),
+                        "folder": folder_path,
+                    })
                 if len(lookup) > before_keys:
                     stats["mails_with_keys"] += 1
                     if stats["mails_with_keys"] <= 30:
@@ -1575,7 +1572,8 @@ class KdeDownloader:
 
     def _login_with_retry(self, page: Any, account: Account, timeout_ms: int) -> None:
         last_failure = "ไม่ทราบสาเหตุ"
-        for attempt in range(1, 4):
+        attempts = getattr(self, "login_attempts", 3)
+        for attempt in range(1, attempts + 1):
             if self.stop_event and self.stop_event.is_set():
                 raise KdeDownloadError("stopped")
             self.log(f"{account.label}: login attempt {attempt}")
@@ -1613,12 +1611,12 @@ class KdeDownloader:
 
                 last_failure = self._login_failure_summary(page)
                 self.log(f"{account.label}: login ยังไม่สำเร็จ {last_failure}")
-            if attempt < 3:
+            if attempt < attempts:
                 self._prepare_login_retry(page, account)
                 if not wait_or_stop(self.settings.busy_wait_seconds, self.stop_event, self.log, f"{account.label}: รอก่อน login ใหม่"):
                     raise KdeDownloadError("stopped while retrying login")
 
-        raise KdeDownloadError(f"login failed after 3 attempts: {last_failure}")
+        raise KdeDownloadError(f"login failed after {attempts} attempts: {last_failure}")
 
     def _open_download_page(self, page: Any, timeout_ms: int) -> None:
         page.get_by_text("Internet File Gateway", exact=True).click(timeout=timeout_ms)
@@ -2126,13 +2124,3 @@ class KdeDownloader:
             except Exception:
                 continue
         return False
-
-
-def run_once_from_config(config_path: str | Path = "config.json", log: LogFn | None = None) -> dict[str, int]:
-    settings = load_settings(config_path)
-    runner = KdeDownloader(settings, log=log)
-    return runner.run_once()
-
-
-if __name__ == "__main__":
-    run_once_from_config()

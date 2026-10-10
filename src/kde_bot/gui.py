@@ -27,6 +27,7 @@ STATUS_LABELS = {
     "running": "กำลังทำงาน", "stage_complete": "ผ่าน", "complete": "สำเร็จ",
     "skipped": "มีไฟล์ครบแล้ว", "copy_pending": "รอคัดลอก", "error": "ผิดพลาด",
     "warning": "ต้องตรวจสอบ", "summary": "สรุปรอบ",
+    "waiting": "รอเมล / รอหน่วงเวลา",
 }
 MODES = {"เก็บทั้งสองที่ (ดาวน์โหลดเดิม แล้วคัดลอกใหม่)": "both",
          "เก็บเฉพาะที่เดิม": "original", "เก็บเฉพาะที่ใหม่": "new"}
@@ -59,6 +60,7 @@ class Application(ttk.Frame):
         self.build_result("complete", "Complete — สำเร็จ")
         self.build_result("error", "Error — ผิดพลาด / รอคัดลอก")
         self.build_result("skipped", "ข้าม — มีไฟล์ครบแล้ว")
+        self.build_result("waiting", "คิวอีเมล — รอทำงาน")
         self.settings_page = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(self.settings_page, text="ตั้งค่า")
         self.build_settings()
@@ -79,11 +81,12 @@ class Application(ttk.Frame):
         controls = ttk.Frame(self)
         controls.grid(row=1, column=0, sticky="ew", pady=(10, 5))
         actions = [
-            ("ตรวจหนึ่งครั้ง", lambda: self.start("once")),
-            ("ตรวจอัตโนมัติ", lambda: self.start("auto")),
+            ("ตรวจเมลและทำคิวครั้งเดียว", lambda: self.start("once")),
+            ("เฝ้ารออีเมล", lambda: self.start("watch")),
             ("ตรวจอีเมล", lambda: self.start("scan")),
             ("ตรวจสิทธิ์ / Browser", lambda: self.start("check")),
             ("ลองคัดลอกที่ค้าง", lambda: self.start("retry")),
+            ("ลองเมลที่ผิดพลาดใหม่", lambda: self.start("requeue")),
         ]
         for column, (label, action) in enumerate(actions):
             button = ttk.Button(controls, text=label, command=action)
@@ -105,7 +108,12 @@ class Application(ttk.Frame):
         page.rowconfigure(1, weight=1)
         self.tabs.add(page, text="ขั้นตอน")
         self.steps_page = page
-        ttk.Label(page, text="ลำดับงานปัจจุบัน — ผลต่อไฟล์อยู่ใน Complete / Error / ข้าม").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        self.account_status = [tk.StringVar(value="Pre: รออีเมล"), tk.StringVar(value="Post: รออีเมล")]
+        account_bar = ttk.Frame(page)
+        account_bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        for index, variable in enumerate(self.account_status):
+            ttk.Label(account_bar, textvariable=variable, wraplength=540).grid(row=0, column=index, sticky="w", padx=(0, 15))
+            account_bar.columnconfigure(index, weight=1)
         self.step_table = ttk.Treeview(page, columns=("step", "status", "reason"), show="headings")
         for field, title, width in (("step", "ขั้นตอน", 280), ("status", "สถานะ", 120), ("reason", "รายละเอียด / สาเหตุ", 660)):
             self.step_table.heading(field, text=title)
@@ -179,7 +187,6 @@ class Application(ttk.Frame):
         ttk.Label(general, text="รหัสผ่านเก็บเฉพาะ Windows user เครื่องนี้ • เปิดเครื่องใหม่แล้วตั้งค่าหรือนำเข้าใหม่ • โปรแกรมไม่เริ่มดาวน์โหลดเอง",
                   wraplength=950).grid(row=6, column=0, columnspan=3, sticky="w", pady=12)
         advanced_fields = [
-            ("จับคู่ Outlook ก่อนดาวน์โหลด", "mail_watch.enabled", "bool"),
             ("Outlook mailbox", "mail_watch.mailbox_filter", "text"),
             ("ตรวจเฉพาะอีเมลวันนี้", "mail_watch.today_only", "bool"),
             ("ค้นหาชื่อไฟล์ในเนื้อหาอีเมลด้วย", "mail_watch.include_body", "bool"),
@@ -187,9 +194,8 @@ class Application(ttk.Frame):
             ("จำนวนตัวอักษร Body สูงสุด", "mail_watch.max_body_chars", "number"),
             ("ใช้ Browser แบบไม่มีหน้าต่าง", "headless", "bool"),
             ("Browser (ว่าง = ตรวจ Chrome/Edge อัตโนมัติ)", "chrome_path", "file"),
-            ("รอบตรวจอัตโนมัติ (วินาที)", "loop_wait_seconds", "number"),
+            ("รอบอ่าน Outlook ในเครื่อง (วินาที; ไม่ Login KDE)", "mail_poll_seconds", "number"),
             ("พักระหว่างไฟล์ (วินาที)", "download_delay_seconds", "number"),
-            ("รอบรอเมื่อบัญชีถูกใช้งาน (วินาที)", "busy_wait_seconds", "number"),
             ("หมดเวลารอหน้าเว็บ (วินาที)", "page_timeout_seconds", "number"),
             ("จำนวนหน้า KDE สูงสุด", "max_pages", "number"),
             ("ช่วงค้นหา KDE (วัน)", "search_days", "number"),
@@ -201,6 +207,8 @@ class Application(ttk.Frame):
         for row, (label, path, kind) in enumerate(advanced_fields):
             self.add_field(advanced, row, label, path, boolean=kind == "bool",
                            browse="file" if kind == "file" else "")
+        ttk.Label(advanced, text="อีเมลใหม่ → หน่วง 3 นาที → เปิด Session แยก Pre/Post พร้อมกันได้\nไม่พบ/โหลดไม่ได้ → Logout และ Login ใหม่ รวมไม่เกิน 2 ครั้ง\nLogin ไม่ได้ → รอ 5 นาที; ไม่มีเมลใหม่จะไม่ Login KDE", wraplength=950).grid(
+            row=len(advanced_fields), column=0, columnspan=3, sticky="w", pady=12)
 
     def scrollable_form(self, notebook: ttk.Notebook, title: str) -> ttk.Frame:
         page = ttk.Frame(notebook)
@@ -350,17 +358,13 @@ class Application(ttk.Frame):
 
         def work():
             try:
-                while not self.stop_event.is_set():
-                    counts = run_cycle(
-                        settings, self.stop_event, lambda event: self.events.put(("event", event)),
-                        scan_only=mode == "scan", check_only=mode == "check", retry_only=mode == "retry",
-                    )
-                    self.events.put(("counts", counts))
-                    if mode != "auto":
-                        break
-                    self.events.put(("notice", f"รอรอบถัดไป {settings['loop_wait_seconds']} วินาที"))
-                    if self.stop_event.wait(settings["loop_wait_seconds"]):
-                        break
+                counts = run_cycle(
+                    settings, self.stop_event, lambda event: self.events.put(("event", event)),
+                    scan_only=mode == "scan", check_only=mode == "check", retry_only=mode == "retry",
+                    watch=mode == "watch",
+                    requeue_failed=mode == "requeue",
+                )
+                self.events.put(("counts", counts))
             except Exception as error:
                 text = str(error)
                 for account in settings["accounts"]:
@@ -398,10 +402,7 @@ class Application(ttk.Frame):
                 self.accept_event(value)
                 changed = True
             elif kind == "counts":
-                self.summary.set(
-                    f"สำเร็จ {value['complete']}  |  รอคัดลอก {value['copy_pending']}  |  "
-                    f"ผิดพลาด {value['error']}  |  มีครบแล้ว {value['skipped']}"
-                )
+                changed = True
             elif kind == "failure":
                 self.status.set("พบข้อผิดพลาด: " + value)
             elif kind == "notice":
@@ -419,12 +420,19 @@ class Application(ttk.Frame):
     def accept_event(self, event: dict[str, Any]) -> None:
         step = int(event["step"])
         label = STATUS_LABELS.get(event["status"], event["status"])
-        self.step_table.item(str(step), values=(f"{step}. {STEPS[step]}", label, event["reason"]))
+        account = event.get("account", "")
+        detail = (account + ": " if account else "") + event["reason"]
+        self.step_table.item(str(step), values=(f"{step}. {STEPS[step]}", label, detail))
+        for index, configured in enumerate(self.settings["accounts"]):
+            if account and account in {configured["label"], configured["username"]}:
+                self.account_status[index].set(f"{configured['label']}: ขั้นตอน {step} — {label} — {event['reason']}")
         self.current_step.set(f"{step}. {STEPS[step]} — {event['reason']}")
         if event["status"] == "summary":
             self.status.set(event["reason"])
         elif event["status"] in {"error", "copy_pending", "warning"}:
             self.status.set(f"ขั้นตอน {step}: {event['reason']}")
+        if event["status"] == "stage_complete" and not event["filename"]:
+            self.rows.pop(event["key"], None)
         if event["filename"] or event["status"] in {"error", "warning"}:
             key = event["key"]
             previous = self.rows.get(key)
@@ -437,8 +445,14 @@ class Application(ttk.Frame):
                 self.rows.popitem(last=False)
 
     def render_results(self) -> None:
+        counts = {"complete": 0, "copy_pending": 0, "error": 0, "skipped": 0}
+        for event in self.rows.values():
+            status = "error" if event["status"] == "warning" else event["status"]
+            if status in counts:
+                counts[status] += 1
+        self.summary.set(f"รายการสำเร็จ {counts['complete']}  |  รอคัดลอก {counts['copy_pending']}  |  ผิดพลาด {counts['error']}  |  มีครบแล้ว {counts['skipped']}")
         search = self.filter.get().casefold()
-        categorized = {"complete": [], "error": [], "skipped": []}
+        categorized = {"complete": [], "error": [], "skipped": [], "waiting": []}
         for key, event in self.rows.items():
             if search and search not in (event["filename"] + " " + event["reason"] + " " + event["account"]).casefold():
                 continue
@@ -548,7 +562,7 @@ class Application(ttk.Frame):
 def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = None) -> int:
     root = tk.Tk()
     root.title("KDE Bot Download V3")
-    root.geometry("1220x850")
+    root.geometry(f"1220x{min(850, root.winfo_screenheight() - 90)}+20+20")
     root.minsize(1000, 700)
     root.option_add("*Font", ("Leelawadee UI", 10))
     style = ttk.Style(root)
@@ -556,6 +570,12 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
     style.configure("Treeview.Heading", font=("Leelawadee UI", 10, "bold"))
     app = Application(root, smoke=smoke_screenshot is not None)
     if smoke_screenshot:
+        # Show only this temporary test window before capturing its rendered UI.
+        root.withdraw()
+        root.update()
+        root.deiconify()
+        root.attributes("-topmost", True)
+        root.lift()
         def capture():
             from PIL import ImageGrab
             app.tabs.select(app.steps_page)
@@ -570,6 +590,12 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                 "status": "copy_pending", "reason": "ตัวอย่าง: ดาวน์โหลดแล้ว แต่ไม่มีสิทธิ์เขียนโฟลเดอร์ใหม่",
                 "filename": "A1015_PAYMENT_09102026.zip.gpg", "account": "Pre",
                 "destination": r"\\10.0.0.97\Z Bot KDE", "attempt": 1,
+            })
+            app.accept_event({
+                "key": "smoke-mail", "time": timestamp(), "step": 2,
+                "status": "waiting", "reason": "ตัวอย่าง: อีเมลใหม่ รอ 3 นาทีก่อนเปิด KDE",
+                "filename": "เมลตัวอย่าง — Payment", "account": "01 Pre",
+                "destination": "", "attempt": 1,
             })
             app.render_results()
             root.update_idletasks()
@@ -592,6 +618,10 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                     "gui_started": True, "steps": len(STEPS), "theme_selector": False,
                     "credential_recovery_notices": app.notices,
                     "error_rows": len(app.tables["error"].get_children()),
+                    "mail_queue_rows": len(app.tables["waiting"].get_children()),
+                    "version": VERSION, "mail_delay_seconds": app.settings["mail_delay_seconds"],
+                    "login_retry_seconds": app.settings["login_retry_seconds"],
+                    "max_session_attempts": app.settings["max_session_attempts"],
                     "machine": socket.gethostname(),
                     "live_portal_access": False,
                 }

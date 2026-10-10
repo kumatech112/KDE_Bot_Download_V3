@@ -18,7 +18,11 @@ NAME = "KDE Bot Download V3"
 
 
 def main() -> int:
-    local = Path(tempfile.mkdtemp(prefix="kde-v3-build-"))
+    builder_root = Path(os.environ.get("KDE_BUILD_HOME", tempfile.gettempdir()))
+    builder_root.mkdir(parents=True, exist_ok=True)
+    if shutil.disk_usage(builder_root).free < 1024 * 1024 * 1024:
+        raise OSError("Need at least 1 GiB free in the local builder; set KDE_BUILD_HOME to a local drive with space")
+    local = Path(tempfile.mkdtemp(prefix="kde-v3-build-", dir=builder_root))
     source = local / "source"
     shutil.copytree(ROOT / "src", source, ignore=shutil.ignore_patterns("__pycache__"))
     icon = local / "app.ico"
@@ -76,7 +80,7 @@ def main() -> int:
     shutil.copytree(distribution, destination)
     executable = destination / f"{NAME}.exe"
     evidence = {
-        "status": "built", "version": "3.0.0", "exe": str(executable),
+        "status": "built", "version": "3.1.0", "exe": str(executable),
         "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
         "local_build": str(local), "build_log": str(build_log),
         "bundled_browser": True, "contains_credentials": False,

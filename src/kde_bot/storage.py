@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import csv
+import copy
 import hashlib
 import json
+import math
 import os
 import socket
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -107,6 +110,8 @@ def verified_copy(source: Path, target: Path, expected_hash: str) -> None:
 class History:
     def __init__(self, folder: Path):
         self.folder = folder
+        self.lock = threading.RLock()
+        self.file_locks: dict[str, threading.RLock] = {}
         self.path = folder / "KDE_State.json"
         self.data: dict[str, Any] = {"version": 3, "files": {}, "outcomes": {}}
         if self.path.exists():
@@ -115,9 +120,35 @@ class History:
                 raise ValueError("ประวัติ KDE ไม่ถูกต้อง กรุณาตรวจ KDE_State.json ก่อนเริ่ม")
             self.data = loaded
             self.data.setdefault("outcomes", {})
+        self.data.setdefault("mail_jobs", {})
+        if not isinstance(self.data["outcomes"], dict) or not isinstance(self.data["mail_jobs"], dict):
+            raise ValueError("ประวัติผลลัพธ์/คิวอีเมลไม่ถูกต้อง กรุณาตรวจ KDE_State.json")
+        for key, job in self.data["mail_jobs"].items():
+            if (not isinstance(job, dict) or job.get("id") != key
+                    or job.get("status") not in {"waiting", "running", "complete", "copy_pending", "exhausted"}
+                    or not isinstance(job.get("lookup"), dict)
+                    or not all(isinstance(value, str) for pair in job.get("lookup", {}).items() for value in pair)
+                    or not isinstance(job.get("attempts"), int) or not 0 <= job["attempts"] <= 2
+                    or not isinstance(job.get("due"), (int, float)) or not math.isfinite(job["due"])
+                    or not all(isinstance(job.get(field), str) for field in ("account", "label", "mail_id"))):
+                raise ValueError("คิวอีเมลเสียหาย: เก็บไฟล์เดิมไว้และหยุดก่อนเปิด KDE")
+        cooldowns = self.data.get("account_cooldowns", {})
+        if not isinstance(cooldowns, dict) or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in cooldowns.values()):
+            raise ValueError("ข้อมูลเวลารอ Login เสียหาย กรุณาตรวจ KDE_State.json")
 
     def save(self) -> None:
-        atomic_json(self.path, self.data)
+        with self.lock:
+            atomic_json(self.path, self.data)
+
+    def set_file(self, key: str, record: dict[str, Any]) -> None:
+        with self.lock:
+            self.data["files"][key] = copy.deepcopy(record)
+            self.save()
+
+    def file_lock(self, filename: str) -> threading.RLock:
+        identity = canonical_file_identity(filename) or filename.casefold()
+        with self.lock:
+            return self.file_locks.setdefault(identity, threading.RLock())
 
     def import_legacy(self, path: Path) -> int:
         loaded = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -175,11 +206,18 @@ class Reporter:
                 result = result.replace(secret, "[REDACTED]")
         return result
 
-    def emit(self, step: int, status: str, reason: str, account: str = "",
+    def emit(self, *args, **kwargs) -> dict[str, Any]:
+        with self.history.lock:
+            return self._emit(*args, **kwargs)
+
+    def _emit(self, step: int, status: str, reason: str, account: str = "",
              filename: str = "", destination: str = "", persist: bool = False,
              sha256: str = "", count: bool = False) -> dict[str, Any]:
         key = record_key(account, filename) if filename else f"stage:{account}:{step}"
         previous = self.history.data["outcomes"].get(key, {})
+        previous_status = previous.get("signature", [None, None])[1]
+        if not filename and status == "stage_complete" and previous_status in {"error", "warning", "copy_pending"}:
+            persist = True
         signature = [step, status, self.redact(reason), destination]
         attempt = int(previous.get("attempt", 0)) + (1 if persist else 0)
         event = {
@@ -190,6 +228,7 @@ class Reporter:
         }
         if count and status in self.counts:
             self.counts[status] += 1
+        event["counts"] = dict(self.counts)
         if persist:
             self.history.data["outcomes"][key] = {"signature": signature, "attempt": attempt}
             if signature != previous.get("signature"):
@@ -217,16 +256,24 @@ class Delivery:
         self.history = history
         self.reporter = reporter
         self.indexes: dict[str, dict[str, list[Path]]] = {}
+        self.index_stamps: dict[str, int] = {}
+        self.index_lock = threading.RLock()
 
     def index(self, folder: Path) -> dict[str, list[Path]]:
+        with self.index_lock:
+            return self._index(folder)
+
+    def _index(self, folder: Path) -> dict[str, list[Path]]:
         key = str(folder).casefold()
-        if key not in self.indexes:
+        stamp = folder.stat().st_mtime_ns
+        if key not in self.indexes or self.index_stamps.get(key) != stamp:
             index: dict[str, list[Path]] = {}
             for path in folder.iterdir():
                 if path.is_file() and not path.name.startswith(".") and not path.name.endswith(".part"):
                     identity = canonical_file_identity(path.name)
                     index.setdefault(identity, []).append(path)
             self.indexes[key] = index
+            self.index_stamps[key] = stamp
         return self.indexes[key]
 
     def existing(self, folder: Path, filename: str) -> Path | None:
@@ -243,8 +290,15 @@ class Delivery:
 
     def deliver(self, account: str, filename: str, folders: list[Path],
                 download: Callable[[Path], Path], recovery_folders: list[Path] | None = None) -> str:
+        # Different files download concurrently; equivalent names serialize publication.
+        with self.history.file_lock(filename):
+            return self._deliver(account, filename, folders, download, recovery_folders)
+
+    def _deliver(self, account: str, filename: str, folders: list[Path],
+                 download: Callable[[Path], Path], recovery_folders: list[Path] | None = None) -> str:
         key = record_key(account, filename)
-        record = self.history.data["files"].get(key, {})
+        with self.history.lock:
+            record = copy.deepcopy(self.history.data["files"].get(key, {}))
         stage = 5
         source: Path | None = None
         downloaded = False
@@ -274,8 +328,7 @@ class Delivery:
                           size=source.stat().st_size, destinations={}, pending=[])
             if downloaded:
                 record["downloaded_at"] = timestamp()
-            self.history.data["files"][key] = record
-            self.history.save()
+            self.history.set_file(key, record)
             copied = False
             for folder, existing in locations:
                 stage = 7
@@ -288,11 +341,12 @@ class Delivery:
                     verified_copy(source, target, digest)
                     record["destinations"][str(folder)] = str(target)
                     copied = copied or was_missing
-                self.history.save()
+                self.history.set_file(key, record)
                 identity = canonical_file_identity(source.name)
-                index = self.index(folder)
-                if target not in index.setdefault(identity, []):
-                    index[identity].append(target)
+                with self.index_lock:
+                    index = self.index(folder)
+                    if target not in index.setdefault(identity, []):
+                        index[identity].append(target)
             status = "complete" if downloaded or copied else "skipped"
             reason = "ดาวน์โหลดและตรวจไฟล์ครบทุกปลายทางที่เลือก" if status == "complete" else "ตรวจ SHA-256 แล้ว พบไฟล์ครบทุกปลายทางที่เลือก"
             self.reporter.emit(7 if len(folders) > 1 or copied else 6, status, reason,
@@ -305,8 +359,7 @@ class Delivery:
                     str(folder) for folder in folders if str(folder) not in record.get("destinations", {})
                 ]
                 record["source_hint"] = str(source)
-                self.history.data["files"][key] = record
-                self.history.save()
+                self.history.set_file(key, record)
             self.reporter.emit(stage, status, f"{type(error).__name__}: {error}",
                                account, filename, " | ".join(map(str, folders)), True, count=True)
             return status

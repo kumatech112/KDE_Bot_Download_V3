@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,21 +70,54 @@ def run_self_check(output: Path) -> int:
                 except RuntimeError:
                     result["checks"].append("Exclusive worker lock")
             from .workflow import StructuredDownloader, make_engine_settings
-            import threading
             engine = StructuredDownloader(
                 make_engine_settings(settings, root / "temporary-engine.json"),
                 reporter, delivery, settings, threading.Event(),
             )
             from .legacy_core import sync_playwright_without_console
-            with sync_playwright_without_console(lambda _message: None) as playwright:
-                browser = playwright.chromium.launch(**engine._browser_launch_kwargs())
-                try:
-                    page = browser.new_page()
-                    page.set_content("<html><body><h1>KDE offline browser check</h1></body></html>")
-                    assert page.locator("h1").inner_text() == "KDE offline browser check"
-                finally:
-                    browser.close()
-            result["checks"].append("Bundled Playwright driver and browser operate offline")
+            barrier = threading.Barrier(2)
+            original_subprocess_factory = asyncio.create_subprocess_exec
+
+            def browser_worker(index):
+                with sync_playwright_without_console(lambda _message: None) as playwright:
+                    browser = playwright.chromium.launch(**engine._browser_launch_kwargs())
+                    try:
+                        context = browser.new_context()
+                        context.add_cookies([{"name": "account", "value": str(index),
+                                             "domain": "example.test", "path": "/"}])
+                        page = context.new_page()
+                        page.set_content("<html><body><h1>KDE offline browser check</h1></body></html>")
+                        barrier.wait(timeout=30)
+                        assert page.locator("h1").inner_text() == "KDE offline browser check"
+                        assert context.cookies()[0]["value"] == str(index)
+                        context.close()
+                        return index
+                    finally:
+                        browser.close()
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                assert list(pool.map(browser_worker, range(2))) == [0, 1]
+            assert asyncio.create_subprocess_exec is original_subprocess_factory
+            result["checks"].append("Two concurrent packaged browser processes with isolated account cookies; offline")
+            from .mail_queue import MailQueue
+            with WorkerLock(logs):
+                history = History(logs)
+                reporter = Reporter(history, lambda _event: None)
+                settings["accounts"][0]["username"] = "offline-user"
+                mail_queue = MailQueue(history, reporter, settings)
+                message = {"entry_id": "offline-message", "store_id": "offline-store", "subject": "Pre",
+                           "lookup": {"payment online 67097": "payment online 67097"}}
+                assert mail_queue.claim_ready(0, set()) == {}
+                mail_queue.ingest([message], 1000)
+                assert mail_queue.claim_ready(1179, set()) == {}
+                batch = mail_queue.claim_ready(1180, set())["offline-user"]
+                job_id = batch[0]["id"]
+                mail_queue.finish({job_id: {"kind": "login_failed", "reason": "offline failure"}}, 1181)
+                assert mail_queue.claim_ready(1480, set()) == {}
+                assert mail_queue.claim_ready(1481, set())["offline-user"][0]["attempts"] == 2
+                mail_queue.finish({job_id: {"kind": "missing", "reason": "offline missing file"}}, 1482)
+                assert mail_queue.claim_ready(9999, set()) == {}
+            result["checks"].append("Packaged durable mail queue: no idle session; 180-second delay; 300-second cooldown; two attempts total")
         result["status"] = "passed"
         exit_code = 0
     except Exception as error:
