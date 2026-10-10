@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,16 @@ from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "KDE Bot Download V3"
+
+
+def source_version() -> str:
+    module = ast.parse((ROOT / "src/kde_bot/__init__.py").read_text(encoding="utf-8"))
+    for node in module.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "VERSION" for target in node.targets):
+            value = ast.literal_eval(node.value)
+            if isinstance(value, str):
+                return value
+    raise ValueError("Missing application VERSION")
 
 
 def main() -> int:
@@ -80,7 +91,7 @@ def main() -> int:
     shutil.copytree(distribution, destination)
     executable = destination / f"{NAME}.exe"
     evidence = {
-        "status": "built", "version": "3.1.0", "exe": str(executable),
+        "status": "built", "version": source_version(), "exe": str(executable),
         "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
         "local_build": str(local), "build_log": str(build_log),
         "bundled_browser": True, "contains_credentials": False,

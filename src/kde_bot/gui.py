@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import csv
 import json
 import os
 import queue
@@ -16,6 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from . import VERSION
+from .activity import ActivityHistory, read_activity, update_latest
 from .settings import (
     import_settings, load_settings, save_settings, settings_home, validate_settings,
 )
@@ -43,6 +43,9 @@ class Application(ttk.Frame):
         self.stop_event = threading.Event()
         self.worker: threading.Thread | None = None
         self.rows: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self.activity = ActivityHistory()
+        self.follow_history = tk.BooleanVar(value=True)
+        self.history_count = tk.StringVar(value="ยังไม่มีประวัติการทำงาน")
         self.variables: dict[str, tk.Variable] = {}
         self.tables: dict[str, ttk.Treeview] = {}
         self.busy_buttons: list[ttk.Button] = []
@@ -56,7 +59,7 @@ class Application(ttk.Frame):
         self.build_controls()
         self.tabs = ttk.Notebook(self)
         self.tabs.grid(row=3, column=0, sticky="nsew", pady=8)
-        self.build_steps()
+        self.build_activity()
         self.build_result("complete", "Complete — สำเร็จ")
         self.build_result("error", "Error — ผิดพลาด / รอคัดลอก")
         self.build_result("skipped", "ข้าม — มีไฟล์ครบแล้ว")
@@ -75,6 +78,8 @@ class Application(ttk.Frame):
             self.status.set("ต้องตั้งค่าเครื่องนี้ก่อนเริ่มงาน")
             self.notice_label.configure(text="\n".join(self.notices))
             self.tabs.select(self.settings_page)
+        elif not self.smoke:
+            self.root.after(300, self.load_history)
 
     def build_controls(self) -> None:
         ttk.Label(self, text=f"KDE Bot Download V3 — {VERSION}", font=("Leelawadee UI", 18, "bold")).grid(row=0, column=0, sticky="w")
@@ -99,28 +104,35 @@ class Application(ttk.Frame):
         bar.columnconfigure(0, weight=1)
         ttk.Label(bar, textvariable=self.status).grid(row=0, column=0, sticky="w")
         ttk.Label(bar, textvariable=self.summary).grid(row=1, column=0, sticky="w", pady=(3, 0))
-        ttk.Label(bar, text="ค้นหาไฟล์:").grid(row=0, column=1, padx=8)
+        ttk.Label(bar, text="ค้นหาประวัติ / ไฟล์:").grid(row=0, column=1, padx=8)
         ttk.Entry(bar, textvariable=self.filter, width=24).grid(row=0, column=2)
 
-    def build_steps(self) -> None:
+    def build_activity(self) -> None:
         page = ttk.Frame(self.tabs, padding=8)
         page.columnconfigure(0, weight=1)
         page.rowconfigure(1, weight=1)
-        self.tabs.add(page, text="ขั้นตอน")
-        self.steps_page = page
-        self.account_status = [tk.StringVar(value="Pre: รออีเมล"), tk.StringVar(value="Post: รออีเมล")]
-        account_bar = ttk.Frame(page)
-        account_bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        for index, variable in enumerate(self.account_status):
-            ttk.Label(account_bar, textvariable=variable, wraplength=540).grid(row=0, column=index, sticky="w", padx=(0, 15))
-            account_bar.columnconfigure(index, weight=1)
-        self.step_table = ttk.Treeview(page, columns=("step", "status", "reason"), show="headings")
-        for field, title, width in (("step", "ขั้นตอน", 280), ("status", "สถานะ", 120), ("reason", "รายละเอียด / สาเหตุ", 660)):
-            self.step_table.heading(field, text=title)
-            self.step_table.column(field, width=width, minwidth=80)
-        self.step_table.grid(row=1, column=0, sticky="nsew")
-        for number, name in STEPS.items():
-            self.step_table.insert("", "end", iid=str(number), values=(f"{number}. {name}", "รอ", ""))
+        self.tabs.add(page, text="ประวัติการทำงาน")
+        self.activity_page = page
+        bar = ttk.Frame(page)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Button(bar, text="โหลดประวัติย้อนหลัง", command=self.load_history).pack(side="left")
+        ttk.Button(bar, text="เปิดโฟลเดอร์ Log", command=self.open_logs).pack(side="left", padx=8)
+        ttk.Button(bar, text="คัดลอกรายการที่เลือก", command=lambda: self.copy_selected("activity")).pack(side="left")
+        ttk.Checkbutton(bar, text="เลื่อนไปรายการล่าสุด", variable=self.follow_history).pack(side="left", padx=12)
+        ttk.Label(bar, textvariable=self.history_count).pack(side="right")
+        columns = ("time", "account", "action", "status", "filename", "reason")
+        self.activity_table = ttk.Treeview(page, columns=columns, show="headings", selectmode="browse")
+        for field, title, width in zip(columns, ("วัน / เวลา", "บัญชี", "การทำงาน", "ผล", "ชื่อไฟล์ / อีเมล", "รายละเอียด / สาเหตุ"), (170, 100, 165, 115, 240, 400)):
+            self.activity_table.heading(field, text=title)
+            self.activity_table.column(field, width=width, minwidth=60, stretch=field in {"filename", "reason"})
+        self.activity_table.grid(row=1, column=0, sticky="nsew")
+        vertical = ttk.Scrollbar(page, orient="vertical", command=self.activity_table.yview)
+        horizontal = ttk.Scrollbar(page, orient="horizontal", command=self.activity_table.xview)
+        vertical.grid(row=1, column=1, sticky="ns")
+        horizontal.grid(row=2, column=0, sticky="ew")
+        self.activity_table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.activity_table.bind("<Double-1>", lambda _event: self.show_selected("activity"))
+        ttk.Label(page, text="เรียงตามเวลา • แสดงล่าสุดไม่เกิน 2,000 รายการ • โหลดจาก CSV 3 เดือนล่าสุด • ดับเบิลคลิกเพื่อดูรายละเอียด").grid(row=3, column=0, sticky="w", pady=(6, 0))
 
     def build_result(self, kind: str, title: str) -> None:
         page = ttk.Frame(self.tabs, padding=8)
@@ -354,7 +366,7 @@ class Application(ttk.Frame):
             return
         self.stop_event.clear()
         self.set_busy(True)
-        self.tabs.select(self.steps_page)
+        self.tabs.select(self.activity_page)
 
         def work():
             try:
@@ -408,8 +420,12 @@ class Application(ttk.Frame):
             elif kind == "notice":
                 self.status.set(value)
             elif kind == "history":
-                for event in value:
-                    self.rows[event["key"]] = event
+                activity, latest = value
+                self.activity.merge(activity)
+                self.rows.clear()
+                for event in latest:
+                    update_latest(self.rows, event)
+                self.status.set(f"โหลดประวัติแล้ว {len(self.activity.entries)} รายการ")
                 changed = True
             elif kind == "idle":
                 self.set_busy(False)
@@ -420,31 +436,41 @@ class Application(ttk.Frame):
     def accept_event(self, event: dict[str, Any]) -> None:
         step = int(event["step"])
         label = STATUS_LABELS.get(event["status"], event["status"])
-        account = event.get("account", "")
-        detail = (account + ": " if account else "") + event["reason"]
-        self.step_table.item(str(step), values=(f"{step}. {STEPS[step]}", label, detail))
-        for index, configured in enumerate(self.settings["accounts"]):
-            if account and account in {configured["label"], configured["username"]}:
-                self.account_status[index].set(f"{configured['label']}: ขั้นตอน {step} — {label} — {event['reason']}")
-        self.current_step.set(f"{step}. {STEPS[step]} — {event['reason']}")
+        self.activity.add(event)
+        self.current_step.set(f"{event.get('account') or 'ระบบ'} | {STEPS.get(step, 'การทำงาน')} — {label} — {event['reason']}")
         if event["status"] == "summary":
             self.status.set(event["reason"])
         elif event["status"] in {"error", "copy_pending", "warning"}:
             self.status.set(f"ขั้นตอน {step}: {event['reason']}")
-        if event["status"] == "stage_complete" and not event["filename"]:
-            self.rows.pop(event["key"], None)
-        if event["filename"] or event["status"] in {"error", "warning"}:
-            key = event["key"]
-            previous = self.rows.get(key)
-            if event["status"] == "running" and previous and previous["status"] in {"error", "copy_pending"}:
-                # Keep a pending delivery visible in Error until it actually succeeds.
-                return
-            self.rows[key] = event
-            self.rows.move_to_end(key)
-            while len(self.rows) > 2000:
-                self.rows.popitem(last=False)
+        update_latest(self.rows, event)
+
+    def render_activity(self) -> None:
+        search = self.filter.get().casefold()
+        visible = [(key, event) for key, event in self.activity.entries.items()
+                   if not search or search in " ".join(str(event.get(field, "")) for field in
+                       ("time", "account", "filename", "reason", "destination", "machine", "run_id")).casefold()
+                   or search in STEPS.get(int(event["step"]), "").casefold()
+                   or search in STATUS_LABELS.get(event["status"], event["status"]).casefold()]
+        desired = {key for key, _ in visible}
+        for key in self.activity_table.get_children():
+            if key not in desired:
+                self.activity_table.delete(key)
+        for position, (key, event) in enumerate(visible):
+            values = (str(event["time"]).replace("T", " ")[:19], event.get("account") or "ระบบ",
+                      STEPS.get(int(event["step"]), "การทำงาน"),
+                      STATUS_LABELS.get(event["status"], event["status"]),
+                      event.get("filename", ""), event.get("reason", ""))
+            if self.activity_table.exists(key):
+                self.activity_table.item(key, values=values)
+                self.activity_table.move(key, "", position)
+            else:
+                self.activity_table.insert("", position, iid=key, values=values)
+        self.history_count.set(f"{len(visible)} / {len(self.activity.entries)} รายการ")
+        if visible and self.follow_history.get():
+            self.activity_table.see(visible[-1][0])
 
     def render_results(self) -> None:
+        self.render_activity()
         counts = {"complete": 0, "copy_pending": 0, "error": 0, "skipped": 0}
         for event in self.rows.values():
             status = "error" if event["status"] == "warning" else event["status"]
@@ -478,11 +504,20 @@ class Application(ttk.Frame):
                     table.insert("", "end", iid=key, values=values)
 
     def selected_details(self, category: str) -> str:
-        selected = self.tables[category].selection()
+        table = self.activity_table if category == "activity" else self.tables[category]
+        selected = table.selection()
         if not selected:
             return ""
-        event = self.rows[selected[0]]
-        return json.dumps(event, ensure_ascii=False, indent=2)
+        event = self.activity.entries[selected[0]] if category == "activity" else self.rows[selected[0]]
+        fields = (("เวลา", event["time"]), ("เครื่อง", event.get("machine", "")),
+                  ("บัญชี", event.get("account") or "ระบบ"),
+                  ("การทำงาน", STEPS.get(int(event["step"]), "การทำงาน")),
+                  ("ผล", STATUS_LABELS.get(event["status"], event["status"])),
+                  ("ชื่อไฟล์ / อีเมล", event.get("filename", "")),
+                  ("รายละเอียด / สาเหตุ", event.get("reason", "")),
+                  ("ปลายทาง", event.get("destination", "")),
+                  ("รอบงาน", event.get("run_id", "")), ("SHA-256", event.get("sha256", "")))
+        return "\n".join(f"{label}: {value}" for label, value in fields if value)
 
     def copy_selected(self, category: str) -> None:
         details = self.selected_details(category)
@@ -493,7 +528,7 @@ class Application(ttk.Frame):
     def show_selected(self, category: str) -> None:
         details = self.selected_details(category)
         if details:
-            messagebox.showinfo("รายละเอียดขั้นตอน", details, parent=self.root)
+            messagebox.showinfo("รายละเอียดการทำงาน", details, parent=self.root)
 
     def load_history(self) -> None:
         if self.worker is not None and self.worker.is_alive():
@@ -507,20 +542,7 @@ class Application(ttk.Frame):
 
         def work():
             try:
-                latest: OrderedDict[str, dict[str, Any]] = OrderedDict()
-                from .storage import record_key
-                for path in sorted(folder.glob("KDE_Log_*.csv"))[-3:]:
-                    with path.open(encoding="utf-8-sig", newline="") as stream:
-                        for row in csv.DictReader(stream):
-                            if not row.get("filename") and row.get("status") not in {"error", "warning"}:
-                                continue
-                            row["step"] = int(row["step"])
-                            row["key"] = record_key(row["account"], row["filename"]) if row["filename"] else f"stage:{row['account']}:{row['step']}"
-                            latest[row["key"]] = row
-                            latest.move_to_end(row["key"])
-                            while len(latest) > 2000:
-                                latest.popitem(last=False)
-                self.events.put(("history", list(latest.values())))
+                self.events.put(("history", read_activity(folder)))
             except Exception as error:
                 self.events.put(("failure", str(error)))
             finally:
@@ -578,26 +600,46 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
         root.lift()
         def capture():
             from PIL import ImageGrab
-            app.tabs.select(app.steps_page)
-            for step in STEPS:
+            app.tabs.select(app.activity_page)
+            examples = [
+                ("10:00:00", 2, "waiting", "01 Pre", "พบอีเมล Payment ใหม่ — รอ 3 นาทีก่อนค้นหาไฟล์", "เมล Payment"),
+                ("10:03:00", 3, "stage_complete", "01 Pre", "เข้าสู่ระบบสำเร็จ", ""),
+                ("10:03:01", 3, "stage_complete", "02 Post", "เข้าสู่ระบบสำเร็จ — Session แยกจาก Pre", ""),
+                ("10:03:10", 4, "error", "01 Pre", "ครั้ง 1/2: ยังไม่พบไฟล์ของเมลนี้ — ปิด Session ก่อนลองใหม่", "เมล Payment"),
+                ("10:03:12", 8, "stage_complete", "01 Pre", "Logout และปิด Session แล้ว", ""),
+                ("10:03:13", 3, "running", "01 Pre", "เข้าสู่ระบบใหม่ ครั้ง 2/2", ""),
+                ("10:03:20", 6, "running", "01 Pre", "กำลังดาวน์โหลดไฟล์จาก KDE", "A1015_PAYMENT_10102026.zip.gpg"),
+                ("10:03:30", 7, "complete", "01 Pre", "ดาวน์โหลดและคัดลอกครบสองปลายทาง — SHA-256 ตรงกัน", "A1015_PAYMENT_10102026.zip.gpg"),
+                ("10:03:31", 7, "complete", "01 Pre", "งานของเมลนี้สำเร็จแล้ว", "เมล Payment"),
+            ]
+            for index, (time, step, status, account, reason, filename) in enumerate(examples):
                 app.accept_event({
-                    "key": f"smoke:{step}", "time": timestamp(), "step": step,
-                    "status": "stage_complete", "reason": "ตัวอย่างขั้นตอน — ยังไม่ได้เชื่อมต่อ KDE",
-                    "filename": "", "account": "Pre", "destination": "", "attempt": 1,
+                    "key": "smoke-payment" if filename == "เมล Payment" else f"smoke:{index}",
+                    "time": f"2026-10-10T{time}+07:00", "step": step,
+                    "status": status, "reason": "ตัวอย่าง: " + reason,
+                    "filename": filename, "account": account, "destination": "", "attempt": 1,
                 })
             app.accept_event({
-                "key": "smoke-file", "time": timestamp(), "step": 7,
+                "key": "smoke-file", "time": "2026-10-10T10:04:00+07:00", "step": 7,
                 "status": "copy_pending", "reason": "ตัวอย่าง: ดาวน์โหลดแล้ว แต่ไม่มีสิทธิ์เขียนโฟลเดอร์ใหม่",
                 "filename": "A1015_PAYMENT_09102026.zip.gpg", "account": "Pre",
                 "destination": r"\\10.0.0.97\Z Bot KDE", "attempt": 1,
             })
             app.accept_event({
-                "key": "smoke-mail", "time": timestamp(), "step": 2,
+                "key": "smoke-mail", "time": "2026-10-10T10:05:00+07:00", "step": 2,
                 "status": "waiting", "reason": "ตัวอย่าง: อีเมลใหม่ รอ 3 นาทีก่อนเปิด KDE",
                 "filename": "เมลตัวอย่าง — Payment", "account": "01 Pre",
                 "destination": "", "attempt": 1,
             })
             app.render_results()
+            app.filter.set("ไม่มีสิทธิ์")
+            filtered = app.activity_table.get_children()
+            history_search_passed = len(filtered) == 1
+            if filtered:
+                app.activity_table.selection_set(filtered[0])
+            details = app.selected_details("activity")
+            readable_event_details = "รายละเอียด / สาเหตุ:" in details and r"\\10.0.0.97\Z Bot KDE" in details
+            app.filter.set("")
             root.update_idletasks()
             smoke_screenshot.parent.mkdir(parents=True, exist_ok=True)
             root.update()
@@ -615,7 +657,10 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                     root.winfo_rootx() + root.winfo_width(), root.winfo_rooty() + root.winfo_height(),
                 )).save(smoke_screenshot.with_name(smoke_screenshot.stem + "-settings.png"))
                 report = {
-                    "gui_started": True, "steps": len(STEPS), "theme_selector": False,
+                    "gui_started": True, "activity_rows": len(app.activity_table.get_children()),
+                    "fixed_step_checklist": False, "theme_selector": False,
+                    "history_search_passed": history_search_passed,
+                    "readable_event_details": readable_event_details,
                     "credential_recovery_notices": app.notices,
                     "error_rows": len(app.tables["error"].get_children()),
                     "mail_queue_rows": len(app.tables["waiting"].get_children()),

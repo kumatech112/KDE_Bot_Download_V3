@@ -67,7 +67,9 @@ def main() -> int:
             raise ValueError("Actual executable verification is missing or belongs to another bundle")
         if name.startswith("packaged") and report.get("status") != "passed":
             raise ValueError("Packaged self-check failed")
-        if name.startswith("gui") and (report.get("version") != "3.1.0" or not report.get("gui_started") or report.get("mail_queue_rows") != 1):
+        if name.startswith("gui") and (report.get("version") != metadata["version"] or not report.get("gui_started") or report.get("mail_queue_rows") != 1
+                                       or report.get("activity_rows", 0) < 1 or report.get("fixed_step_checklist") is not False
+                                       or not report.get("history_search_passed") or not report.get("readable_event_details")):
             raise ValueError("Packaged GUI verification failed")
     old = validate_bundle(ROOT / "portable", arguments.expected_old_sha)
     reject_running_bundle(old)

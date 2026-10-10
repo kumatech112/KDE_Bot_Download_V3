@@ -1,4 +1,17 @@
-# KDE Bot Download V3 — 3.1.0
+# KDE Bot Download V3 — 3.1.1
+
+- Replace the fixed eight-step page with chronological Thai work history.
+- Retain errors, fresh-login retries and later success as separate events; keep Complete/Error as latest outcomes.
+- Add history reload, text search, follow-latest control and readable event details.
+- Record meaningful business transitions in the existing monthly CSV without idle poll spam or new folders.
+- Reload the latest three months, show up to 2,000 recent events and deduplicate replay against live history.
+- Retain older logs, credentials, destinations, mail triggers, concurrency and retry timing.
+- Derive build version from source and require packaged history GUI evidence before promotion.
+- Confirm directory-cache misses from disk before another download, including delayed NTFS/SMB timestamps.
+
+Short commit message: feat: replace KDE checklist with work history
+
+## 3.1.0
 
 - Replace serial scheduled account loops with a durable mail queue.
 - Remove the old loop entrypoints and timer controls; Outlook polling performs no portal operations.
@@ -16,5 +29,3 @@
 - Replace the previous portable release after the replacement passes actual EXE checks.
 
 Changed files/functions are mapped in ARCHITECTURE.md. Deployment limits are recorded in VERIFICATION.md.
-
-Short commit message: feat: trigger KDE downloads from mail with concurrent accounts

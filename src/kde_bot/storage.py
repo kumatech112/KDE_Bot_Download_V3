@@ -198,6 +198,7 @@ class Reporter:
         self.run_id = uuid.uuid4().hex[:12]
         self.counts = {"complete": 0, "skipped": 0, "copy_pending": 0, "error": 0}
         self.secrets: list[str] = []
+        self.activity_last: dict[tuple[str, str, int], list[Any]] = {}
 
     def redact(self, text: Any) -> str:
         result = str(text)
@@ -221,7 +222,7 @@ class Reporter:
         signature = [step, status, self.redact(reason), destination]
         attempt = int(previous.get("attempt", 0)) + (1 if persist else 0)
         event = {
-            "key": key, "time": timestamp(), "machine": socket.gethostname(),
+            "key": key, "time": datetime.now().astimezone().isoformat(timespec="microseconds"), "machine": socket.gethostname(),
             "run_id": self.run_id, "account": account, "filename": filename,
             "step": step, "status": status, "reason": signature[2],
             "destination": destination, "attempt": attempt, "sha256": sha256,
@@ -229,26 +230,38 @@ class Reporter:
         if count and status in self.counts:
             self.counts[status] += 1
         event["counts"] = dict(self.counts)
+        outcome_changed = persist and signature != previous.get("signature")
+        activity_key = (account, filename, step)
+        # Save business transitions, not every mailbox poll or file-existence check.
+        progress = ((not filename and status in {"running", "stage_complete", "summary"})
+                    or (filename and step == 6 and status == "running")
+                    or (persist and status in {"error", "warning", "copy_pending"}))
+        progress_changed = progress and signature != self.activity_last.get(activity_key)
+        event["activity_recorded"] = bool(outcome_changed or progress_changed)
+        if event["activity_recorded"]:
+            self.append_activity(event)
+        self.activity_last[activity_key] = signature
         if persist:
             self.history.data["outcomes"][key] = {"signature": signature, "attempt": attempt}
-            if signature != previous.get("signature"):
-                path = self.history.folder / f"KDE_Log_{datetime.now():%Y-%m}.csv"
-                has_header = path.exists() and path.stat().st_size > 0
-                with path.open("a", encoding="utf-8-sig" if not has_header else "utf-8", newline="") as stream:
-                    writer = csv.DictWriter(stream, fieldnames=CSV_FIELDS)
-                    if not has_header:
-                        writer.writeheader()
-                    row = {field: self.redact(event[field]) for field in CSV_FIELDS}
-                    # Prevent formulas when a user opens externally supplied filenames in Excel.
-                    row = {
-                        field: "'" + value if value.startswith(("=", "+", "-", "@")) else value
-                        for field, value in row.items()
-                    }
-                    writer.writerow(row)
-                    stream.flush()
+            if outcome_changed:
                 self.history.save()
         self.callback(event)
         return event
+
+    def append_activity(self, event: dict[str, Any]) -> None:
+        """Append to the existing monthly CSV while the shared history lock is held."""
+        path = self.history.folder / f"KDE_Log_{datetime.now():%Y-%m}.csv"
+        has_header = path.exists() and path.stat().st_size > 0
+        with path.open("a", encoding="utf-8-sig" if not has_header else "utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=CSV_FIELDS)
+            if not has_header:
+                writer.writeheader()
+            row = {field: self.redact(event[field]) for field in CSV_FIELDS}
+            # Prevent formulas when externally supplied filenames are opened in Excel.
+            row = {field: "'" + value if value.startswith(("=", "+", "-", "@")) else value
+                   for field, value in row.items()}
+            writer.writerow(row)
+            stream.flush()
 
 
 class Delivery:
@@ -259,14 +272,14 @@ class Delivery:
         self.index_stamps: dict[str, int] = {}
         self.index_lock = threading.RLock()
 
-    def index(self, folder: Path) -> dict[str, list[Path]]:
+    def index(self, folder: Path, refresh: bool = False) -> dict[str, list[Path]]:
         with self.index_lock:
-            return self._index(folder)
+            return self._index(folder, refresh)
 
-    def _index(self, folder: Path) -> dict[str, list[Path]]:
+    def _index(self, folder: Path, refresh: bool = False) -> dict[str, list[Path]]:
         key = str(folder).casefold()
         stamp = folder.stat().st_mtime_ns
-        if key not in self.indexes or self.index_stamps.get(key) != stamp:
+        if refresh or key not in self.indexes or self.index_stamps.get(key) != stamp:
             index: dict[str, list[Path]] = {}
             for path in folder.iterdir():
                 if path.is_file() and not path.name.startswith(".") and not path.name.endswith(".part"):
@@ -284,6 +297,11 @@ class Delivery:
             return exact
         candidates = self.index(folder).get(canonical_file_identity(filename), [])
         valid = [path for path in candidates if path.exists() and path.stat().st_size > 0]
+        if not valid:
+            # NTFS/SMB directory timestamps can lag a competing publication.
+            # Confirm a cache miss from the directory before downloading again.
+            candidates = self.index(folder, refresh=True).get(canonical_file_identity(filename), [])
+            valid = [path for path in candidates if path.exists() and path.stat().st_size > 0]
         if len(valid) > 1:
             raise FileExistsError(f"พบไฟล์ชื่อเทียบเท่าหลายไฟล์ ต้องตรวจสอบ: {filename}")
         return valid[0] if valid else None

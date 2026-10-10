@@ -1,8 +1,15 @@
-# Verification — 2026-10-10 — 3.1.0
+# Verification — 2026-10-10 — 3.1.1
 
 ## Completed checks
 
-- 62 regression tests and 4 subtests passed after the final implementation changes.
+- 68 regression tests and 4 subtests passed after the implementation changes.
+- Error → fresh login retry → success remained separate chronological events after CSV reload.
+- Repeated history reloads deduplicated saved/live events, including Excel-safe filenames.
+- Bounded history retained recent events from both accounts in chronological order.
+- Repeated unchanged idle summaries/errors did not flood monthly CSV.
+- Progress logging retained credential redaction and did not replace authoritative outcomes.
+- Successful login recovery cleared latest errors while retaining the historical failure.
+- Directory-cache miss recovery detected another worker's equivalent filename even with deliberately delayed directory timestamps.
 - No-mail monitoring opened no KDE session, despite repeated local mailbox checks.
 - Each newly observed message waited 180 seconds; rediscovery did not extend its deadline.
 - Pre/Post workers overlapped, with a maximum of one active batch per account.
@@ -20,7 +27,8 @@
 - Preserved date/account matching, ambiguity protection, split-volume, DPAPI, conflict and copy-recovery regressions passed.
 - Corrupt shared mail state failed without resetting its original file.
 - Actual packaged EXE passed its offline self-check, including two concurrent real browser processes with isolated cookies.
-- Actual packaged Thai GUI passed and was visually checked: 8 steps, mail queue, account progress, accessible Settings and no theme selector.
+- Actual packaged Thai GUI passed and was visually checked: chronological work history, mail queue, accessible Settings and no theme selector.
+- Packaged GUI history search and readable Thai event details passed; the fixed step checklist is absent.
 - Packaged reports include the executable hash, linking checks to this specific bundle.
 - Recovered login failures clear from live results and saved outcome history; counters represent current rows rather than cumulative failed attempts.
 
@@ -28,11 +36,11 @@
 
 portable/KDE Bot Download V3.exe
 
-SHA-256: 34b6cf2c6ffb14f9896d03d2ec31c0f71da7cd965f757a93a36b01a75944d9bf
+SHA-256: 5bfbb3411c09768a4d19c1a477fc2227effa3b73a52c9b0e8c08e661715eae22
 
 Only EXE, _internal and the Thai manual are distributed. Raw reports/screenshots stay under docs/verification and are excluded from Git.
 
-The previous project portable and intermediate candidate are removed after verification. Local Windows settings, shared business files/history and other projects are retained.
+The previous project portable is removed after verification. Local Windows settings, shared business files/history and other projects are retained.
 Build tools now require at least 1 GiB free and support KDE_BUILD_HOME for a local builder with adequate space. This release was built on D:.
 
 ## Deployment boundary

@@ -15,7 +15,9 @@ Flow: per-user settings → validation → shared worker lock → pending-copy r
 | src/kde_bot/storage.py | WorkerLock, check_writable | Exclusive OS/SMB worker lock and temporary permission probe |
 | src/kde_bot/storage.py | History.save, History.import_legacy | Compact shared history; merge without replacing existing V3 records |
 | src/kde_bot/storage.py | History.__init__, set_file, file_lock | Validate durable mail jobs; synchronize state; serialize equivalent filenames across accounts |
-| src/kde_bot/storage.py | Reporter.emit, Reporter.redact | Structured outcomes; redact passwords; suppress unchanged CSV outcomes |
+| src/kde_bot/storage.py | Reporter.emit, Reporter._emit, Reporter.append_activity, Reporter.redact | Monthly business transitions and outcomes; redact passwords; suppress unchanged idle/errors/outcomes |
+| src/kde_bot/activity.py | event_identity, ActivityHistory.add, ActivityHistory.merge | Chronological event identity; bounded recent history; deduplicate live and replayed events |
+| src/kde_bot/activity.py | read_activity, update_latest | Read existing monthly CSVs; keep outcome views independent of chronological history; clear resolved stage errors |
 | src/kde_bot/storage.py | Delivery.index, Delivery.existing, Delivery.deliver, verified_copy | Per-destination completion, partial delivery retry, hash verification and no overwrite on conflicts |
 | src/kde_bot/workflow.py | selected_folders, detect_chrome, make_engine_settings, run_cycle | Destination selection, environment checks, KDE-only orchestration |
 | src/kde_bot/workflow.py | StructuredDownloader overrides | Structured stage events and delivery integration around the preserved portal engine |
@@ -27,13 +29,17 @@ Flow: per-user settings → validation → shared worker lock → pending-copy r
 | src/kde_bot/legacy_core.py | scan_mail_filenames, _login_with_retry | Read-only message metadata hook, including duplicate filenames; one login attempt per V3 session |
 | src/kde_bot/legacy_core.py | sync_playwright_without_console | Reference-count hidden driver launch across concurrent runtimes and restore after the last worker exits |
 | src/kde_bot/legacy_core.py | KdeDownloader._download_visible_pages | Add optional file callback after the existing matching filters; original behavior retained when absent |
-| src/kde_bot/gui.py | Application.build_controls, build_steps, build_result, build_settings | Plain Thai ttk GUI without theme selection |
+| src/kde_bot/gui.py | Application.build_controls, build_activity, build_result, build_settings | Plain Thai ttk GUI; work history replaces the fixed step checklist |
+| src/kde_bot/gui.py | Application.__init__ | Initialize chronological history and follow/search state; reload saved history for configured launches |
 | src/kde_bot/gui.py | collect_settings, save_configuration, import_configuration, import_history | Explicit machine setup and migration controls |
-| src/kde_bot/gui.py | start, stop, drain_events, accept_event, render_results, load_history | Background work; stable per-file rows; meaningful outcomes |
+| src/kde_bot/gui.py | start, stop, drain_events, accept_event, render_activity, render_results, load_history | Background work; chronological activity, search/follow controls and stable latest outcomes |
+| src/kde_bot/gui.py | selected_details, copy_selected, show_selected | Readable Thai event details, including destination, machine, run and hash |
 | src/kde_bot/gui.py | close, wait_to_close, launch | Graceful worker shutdown and screenshot smoke |
 | src/kde_bot/selfcheck.py | run_self_check | Real packaged credential/storage/browser checks using temporary data |
-| tools/build_portable.py | main | Local PyInstaller build, pinned headless browser, signed Node wrapper and portable publish |
+| tools/build_portable.py | main, source_version | Local PyInstaller build, source-version metadata, pinned headless browser, signed Node wrapper and portable publish |
 | tools/promote_portable.py | validate_bundle, reject_running_bundle, main | Check verification hashes and running processes; promote within this project; remove only explicitly identified old KDE bundles |
+
+The 3.1.1 patch changes Application.__init__, build_controls, build_activity (replaces build_steps), start, drain_events, accept_event, render_activity, render_results, selected_details, show_selected, load_history and launch in gui.py; Reporter.__init__, _emit and append_activity plus Delivery.index, _index and existing in storage.py; all new activity.py helpers; build_portable.source_version/main; and promote_portable.main. Settings and portal/session/mail scheduling code are unchanged.
 
 ## Preserved behavior
 
@@ -52,8 +58,10 @@ Transitions: waiting → running → complete/copy_pending; failures return to w
 Completion requires SHA-256 equality for every selected destination. Existing files are never replaced when content differs.
 An interrupted copy leaves the source available for retry. Pending copies are retried even if the matching email has since been read.
 An unreadable history fails closed. No silent history reset is permitted.
-Monthly CSV is an outcome log, not an append-only transcript of every browser/debug line. Unchanged duplicate outcomes are suppressed; attempt counts remain in JSON.
-GUI rows are keyed by account and canonical business-file identity, and updated on retries.
+Monthly CSV retains business transitions: mail arrival/delay, login/search/session results, downloads, delivery outcomes and retries. Repeated unchanged idle summaries/errors and duplicate skipped outcomes are suppressed. File-existence checks and raw browser/debug chatter are not appended. No additional history files or per-run folders are introduced.
+Reporter timestamps have microsecond precision to distinguish successive actions. Progress records do not replace authoritative JSON outcomes or change the mail retry budget. JSON mutations and CSV writes remain under the shared history lock.
+The GUI timeline uses an event identity, retaining errors followed by retry and success. It reloads the latest three monthly CSVs and displays up to 2,000 recent events; full history stays in CSV. Replaying the same history does not add duplicate rows. Configured launches load history in a background thread.
+Complete/Error rows remain keyed by account and canonical business-file identity and show latest outcomes. Successful recovery clears current stage errors while retaining their historical events. Older CSVs display only the events actually recorded at the time.
 
 ## Verification boundaries
 

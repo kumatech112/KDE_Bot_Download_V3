@@ -6,6 +6,7 @@ import csv
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
@@ -388,13 +389,23 @@ def test_overlapping_browser_workers_restore_subprocess_factory_in_either_exit_o
     assert asyncio.create_subprocess_exec is original
 
 
-def test_delivery_index_detects_other_worker_publishing_equivalent_name(tmp_path):
+def test_delivery_index_detects_other_worker_publishing_equivalent_name(tmp_path, monkeypatch):
     settings, history, events, reporter, queue = setup_queue(tmp_path)
     delivery = Delivery(history, reporter)
     original = tmp_path / "original_dir"
     assert delivery.existing(original, "A1015_TEST_10102026.zip.gpg") is None
     other = original / "A1015_TEST_10102026.7z.gpg"
     other.write_bytes(b"published by other account")
+    # Simulate cached NTFS/SMB metadata still reporting the original timestamp.
+    stale_stamp = delivery.index_stamps[str(original).casefold()]
+    real_stat = Path.stat
+
+    def delayed_directory_stat(path, *args, **kwargs):
+        if path == original:
+            return SimpleNamespace(st_mtime_ns=stale_stamp)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", delayed_directory_stat)
     assert delivery.existing(original, "A1015_TEST_10102026.zip.gpg") == other
 
 
@@ -410,15 +421,16 @@ def test_recovered_login_error_is_cleared_live_and_in_saved_outcomes(tmp_path):
     app = object.__new__(Application)
     app.settings = settings
     app.rows = OrderedDict()
-    app.step_table = SimpleNamespace(item=lambda *_args, **_kwargs: None)
+    from kde_bot.activity import ActivityHistory
+    app.activity = ActivityHistory()
     app.current_step = Variable()
     app.status = Variable()
-    app.account_status = [Variable(), Variable()]
     reporter.callback = app.accept_event
     failed = reporter.emit(3, "error", "login temporarily failed", "01 Pre", persist=True)
     assert failed["key"] in app.rows
     reporter.emit(3, "stage_complete", "login succeeded", "01 Pre")
     assert failed["key"] not in app.rows
+    assert [event["status"] for event in app.activity.entries.values()] == ["error", "stage_complete"]
     assert history.data["outcomes"][failed["key"]]["signature"][1] == "stage_complete"
     with next(history.folder.glob("KDE_Log_*.csv")).open(encoding="utf-8-sig", newline="") as stream:
         assert [row["status"] for row in csv.DictReader(stream)] == ["error", "stage_complete"]
