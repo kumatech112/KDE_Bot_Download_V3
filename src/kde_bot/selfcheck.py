@@ -17,6 +17,51 @@ from .settings import atomic_json, default_settings, load_settings, save_setting
 from .storage import Delivery, History, Reporter, WorkerLock
 
 
+def check_flat_storage(root: Path) -> None:
+    """Exercise both account deliveries without creating account subdirectories."""
+    from .workflow import selected_folders
+
+    settings = default_settings()
+    for key in ("original_dir", "new_dir", "log_dir"):
+        folder = root / ("flat-" + key)
+        folder.mkdir()
+        settings[key] = str(folder)
+    for account in settings["accounts"]:
+        account["original_dir"] = str(Path(settings["original_dir"]) / account["label"])
+    history = History(Path(settings["log_dir"]))
+    reporter = Reporter(history, lambda _event: None)
+    barrier = threading.Barrier(2)
+    downloads = []
+
+    def deliver(index: int) -> str:
+        def download(path: Path) -> Path:
+            barrier.wait(timeout=30)
+            path.write_bytes(f"offline account {index}".encode("utf-8"))
+            downloads.append(path)
+            return path
+
+        account = settings["accounts"][index]
+        return Delivery(history, reporter).deliver(
+            f"flat-user-{index}", f"flat-file-{index}.gpg",
+            selected_folders(settings, account), download,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(deliver, range(2))) == ["complete", "complete"]
+    assert len(downloads) == 2
+    for key in ("original_dir", "new_dir"):
+        folder = Path(settings[key])
+        assert {path.name for path in folder.iterdir()} == {"flat-file-0.gpg", "flat-file-1.gpg"}
+        assert all(path.is_file() for path in folder.iterdir())
+        for index in range(2):
+            assert (folder / f"flat-file-{index}.gpg").read_bytes() == f"offline account {index}".encode("utf-8")
+    for mode, keys in (("original", ["original_dir"]), ("new", ["new_dir"]),
+                       ("both", ["original_dir", "new_dir"])):
+        settings["storage_mode"] = mode
+        for account in settings["accounts"]:
+            assert selected_folders(settings, account) == [Path(settings[key]) for key in keys]
+
+
 def check_outlook_folder_filter(root: Path) -> None:
     """Use fake COM folders to verify the deployed scanner without reading real mail."""
     from . import legacy_core as core
@@ -182,6 +227,8 @@ def run_self_check(output: Path) -> int:
             result["checks"].append("Packaged durable mail queue: no idle session; 180-second delay; 300-second cooldown; two attempts total")
             check_outlook_folder_filter(root)
             result["checks"].append("Packaged Outlook scanner: skip Notes, scan mail children, recover rejected UnRead filter, ignore read/non-mail items; fake COM only")
+            check_flat_storage(root)
+            result["checks"].append("Two concurrent accounts store verified files directly in shared destination roots; legacy account subfolders ignored in all three modes")
         result["status"] = "passed"
         exit_code = 0
     except Exception as error:

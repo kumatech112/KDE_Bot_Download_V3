@@ -32,7 +32,8 @@ STEPS = {
 
 
 def selected_folders(settings: dict[str, Any], account: dict[str, Any]) -> list[Path]:
-    original = Path(account.get("original_dir") or settings["original_dir"])
+    """Both accounts publish directly into the shared configured roots."""
+    original = Path(settings["original_dir"])
     new = Path(settings["new_dir"])
     mode = settings["storage_mode"]
     folders = {"both": [original, new], "original": [original], "new": [new]}[mode]
@@ -168,7 +169,7 @@ class StructuredDownloader(core.KdeDownloader):
         self.stage = 5
         configuration = next(item for item in self.configuration["accounts"] if item["username"] == account.username)
         folders = selected_folders(self.configuration, configuration)
-        recovery = [Path(configuration.get("original_dir") or self.configuration["original_dir"]),
+        recovery = [Path(self.configuration["original_dir"]),
                     Path(self.configuration["new_dir"])]
         status = self.delivery.deliver(
             account.username, core.safe_filename(row["filename"]), folders,
@@ -281,7 +282,7 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
                 delivery.deliver(
                     account["username"], record["filename"], selected_folders(settings, account),
                     cannot_redownload,
-                    [Path(account.get("original_dir") or settings["original_dir"]), Path(settings["new_dir"])],
+                    [Path(settings["original_dir"]), Path(settings["new_dir"])],
                 )
             if retry_only or stop_event.is_set():
                 reporter.emit(8, "summary", "จบการลองคัดลอกไฟล์ที่ค้าง")

@@ -1,8 +1,13 @@
-# Verification — 2026-10-10 — 3.1.2
+# Verification — 2026-10-10 — 3.1.3
 
 ## Completed checks
 
-- 80 regression tests and 4 subtests passed after the implementation changes.
+- 85 regression tests and 4 subtests passed after the implementation changes.
+- Old V3 account-folder overrides are dropped on load/import/save while global roots, credentials and enabled-account choices survive.
+- Legacy combined configuration imports only KDE and does not restore the former account download folders.
+- Both accounts select identical roots in all three storage modes, even when raw legacy overrides are supplied.
+- Two concurrent accounts publish verified files directly at both roots without account subdirectories.
+- Pending-copy repair uses the shared roots without a portal download or recreation of deleted account folders.
 - Reproduced the screenshot's invalid UnRead filter on a Notes folder using fake Outlook COM.
 - All seven known non-mail folder types skipped item filtering while their mail children remained readable.
 - Rejected mail-folder filters fell back to per-item read checks without adding false scan errors or changing unread flags.
@@ -33,8 +38,10 @@
 - Preserved date/account matching, ambiguity protection, split-volume, DPAPI, conflict and copy-recovery regressions passed.
 - Corrupt shared mail state failed without resetting its original file.
 - Actual packaged EXE passed its offline self-check, including two concurrent real browser processes with isolated cookies.
+- Actual packaged flat-storage check delivered both account files at both roots, verified their bytes, and confirmed no account subdirectories in all three modes.
 - Actual packaged scanner passed the Notes-folder and rejected-filter reproduction using fake COM, including child traversal and unchanged unread flags.
 - Actual packaged Thai GUI passed and was visually checked: chronological work history, mail queue, accessible Settings and no theme selector.
+- Settings displays the combined-storage explanation and contains no account-specific folder inputs.
 - Packaged GUI history search and readable Thai event details passed; the fixed step checklist is absent.
 - Packaged reports include the executable hash, linking checks to this specific bundle.
 - Recovered login failures clear from live results and saved outcome history; counters represent current rows rather than cumulative failed attempts.
@@ -43,7 +50,7 @@
 
 portable/KDE Bot Download V3.exe
 
-SHA-256: 719c5d1a46fd7cd9503ef8c84af5b263fb00495f7b8ae3201ef8617888dd311a
+SHA-256: 0aefe9a74c4634db53d69e3fa5256dff697de70a12412fc505913e91882e9be6
 
 Only EXE, _internal and the Thai manual are distributed. Raw reports/screenshots stay under docs/verification and are excluded from Git.
 
@@ -55,6 +62,7 @@ Build tools now require at least 1 GiB free and support KDE_BUILD_HOME for a loc
 Tests ran on 10.0.0.73, opening the executable stored on 10.0.0.97.
 Execution under the Windows user on 10.0.0.97, that user's share permissions/Outlook profile, and live KDE login/download/logout remain unverified.
 The user's screenshot identifies the failing Notes-folder condition on .97. Regression and packaged Outlook-filter checks use fake COM folders, not that machine's live mailbox.
+The user's later screenshot identifies a denied temporary-file write at the .243 destination root. Flat storage still requires that user's root write access; this release does not change SMB/Windows permissions. The deleted 01 Pre/02 Post directories are not recreated, and existing business files are not relocated.
 No live production download, credential deployment, business-file overwrite or modification of another application was performed.
 
 The monitor polls Outlook locally every 15 seconds; it is not a server webhook. Portal sessions only start for eligible queued mail. First observation includes previously unprocessed unread messages.

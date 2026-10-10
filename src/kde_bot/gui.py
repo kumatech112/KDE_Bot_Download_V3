@@ -187,18 +187,19 @@ class Application(ttk.Frame):
         self.add_field(general, 1, "โฟลเดอร์เดิม", "original_dir", browse="folder")
         self.add_field(general, 2, "โฟลเดอร์ใหม่", "new_dir", browse="folder")
         self.add_field(general, 3, "โฟลเดอร์ Log", "log_dir", browse="folder")
+        ttk.Label(general, text="Pre/Post เก็บไฟล์รวมในโฟลเดอร์ปลายทางที่เลือก ไม่มีโฟลเดอร์แยกบัญชี",
+                  wraplength=950).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         for index in range(2):
             frame = ttk.LabelFrame(general, text="บัญชี Pre" if index == 0 else "บัญชี Post", padding=10)
-            frame.grid(row=4 + index, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+            frame.grid(row=5 + index, column=0, columnspan=3, sticky="ew", pady=(12, 0))
             frame.columnconfigure(1, weight=1)
             prefix = f"accounts.{index}."
             self.add_field(frame, 0, "ใช้งานบัญชี", prefix + "enabled", boolean=True)
             self.add_field(frame, 1, "ชื่อแสดง", prefix + "label")
             self.add_field(frame, 2, "ชื่อผู้ใช้ KDE", prefix + "username")
             self.add_field(frame, 3, "รหัสผ่าน KDE", prefix + "password", password=True)
-            self.add_field(frame, 4, "โฟลเดอร์เดิมเฉพาะบัญชี (ว่าง = ใช้ด้านบน)", prefix + "original_dir", browse="folder")
         ttk.Label(general, text="รหัสผ่านเก็บเฉพาะ Windows user เครื่องนี้ • เปิดเครื่องใหม่แล้วตั้งค่าหรือนำเข้าใหม่ • โปรแกรมไม่เริ่มดาวน์โหลดเอง",
-                  wraplength=950).grid(row=6, column=0, columnspan=3, sticky="w", pady=12)
+                  wraplength=950).grid(row=7, column=0, columnspan=3, sticky="w", pady=12)
         advanced_fields = [
             ("Outlook mailbox", "mail_watch.mailbox_filter", "text"),
             ("ตรวจเฉพาะอีเมลวันนี้", "mail_watch.today_only", "bool"),
@@ -661,6 +662,10 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                 report = {
                     "gui_started": True, "activity_rows": len(app.activity_table.get_children()),
                     "fixed_step_checklist": False, "theme_selector": False,
+                    "account_folder_overrides": any(
+                        path.startswith("accounts.") and path.endswith(".original_dir")
+                        for path in app.variables
+                    ),
                     "history_search_passed": history_search_passed,
                     "readable_event_details": readable_event_details,
                     "credential_recovery_notices": app.notices,

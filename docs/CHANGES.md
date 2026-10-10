@@ -1,4 +1,15 @@
-# KDE Bot Download V3 — 3.1.2
+# KDE Bot Download V3 — 3.1.3
+
+- Store both Pre/Post account downloads directly in the selected shared destination roots.
+- Remove account-specific folder controls and discard old account folder overrides on settings load/save/import.
+- Route pending-copy recovery through the same shared roots without recreating deleted account folders.
+- Retain global destination preferences, local encrypted credentials, history, mail timing and two-account concurrency.
+- Verify migration, all three storage modes, concurrent flat delivery and root-based pending-copy repair.
+- Document that Windows/SMB root write permissions still apply; no existing business files are moved or deleted.
+
+Short commit message: fix: store KDE files directly in shared destination roots
+
+## 3.1.2
 
 - Fix the Notes-folder `Condition is not valid` error by checking Outlook DefaultItemType before filtering items.
 - Skip non-mail folders while retaining traversal into their mail subfolders; ignore non-MailItem objects.

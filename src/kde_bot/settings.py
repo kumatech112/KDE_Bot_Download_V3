@@ -38,8 +38,8 @@ def default_settings() -> dict[str, Any]:
         "max_session_attempts": 2,
         "page_timeout_seconds": 60,
         "accounts": [
-            {"label": "01 Pre", "username": "", "password": "", "enabled": True, "original_dir": ""},
-            {"label": "02 Post", "username": "", "password": "", "enabled": True, "original_dir": ""},
+            {"label": "01 Pre", "username": "", "password": "", "enabled": True},
+            {"label": "02 Post", "username": "", "password": "", "enabled": True},
         ],
         "mail_watch": {
             "enabled": True,
@@ -167,11 +167,7 @@ def import_settings(path: Path) -> tuple[dict[str, Any], list[str]]:
     ):
         return normalize_settings(raw), notices
     result = normalize_settings(raw)
-    for source, account in zip(raw.get("accounts", []), result["accounts"]):
-        original = str(source.get("download_dir", "")).strip()
-        if original and original.rstrip("\\/") != result["original_dir"].rstrip("\\/"):
-            account["original_dir"] = original
-    notices.append("นำเข้าบัญชีและกฎจับคู่แล้ว ใช้ปลายทางและ Log ของ V3 กรุณาตรวจค่าก่อนบันทึก")
+    notices.append("นำเข้าบัญชีและกฎจับคู่แล้ว Pre/Post เก็บไฟล์รวมในปลายทางที่เลือก ไม่ใช้โฟลเดอร์แยกบัญชีเดิม กรุณาตรวจค่าก่อนบันทึก")
     return result, notices
 
 
@@ -198,9 +194,6 @@ def validate_settings(settings: dict[str, Any], require_credentials: bool = True
         if username and username.casefold() in seen:
             raise ValueError("บัญชี Pre/Post ต้องไม่ใช้ชื่อผู้ใช้ซ้ำกัน")
         seen.add(username.casefold())
-        override = str(account.get("original_dir", "")).strip()
-        if override and not Path(override).is_absolute():
-            raise ValueError(f"{account['label']}: โฟลเดอร์เดิมต้องเป็นตำแหน่งเต็ม")
     for key in ("portal_url", "host_url", "auth_api_url"):
         if not str(settings[key]).startswith("https://"):
             raise ValueError(f"{key}: ต้องใช้ HTTPS")

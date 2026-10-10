@@ -225,6 +225,7 @@ def test_partially_missing_mail_files_are_not_marked_complete(tmp_path):
 
 def test_concurrent_delivery_saves_both_records_without_corrupting_history(tmp_path):
     settings, history, events, reporter, queue = setup_queue(tmp_path)
+    from kde_bot.workflow import selected_folders
     barrier = threading.Barrier(2)
 
     def deliver(index):
@@ -232,8 +233,10 @@ def test_concurrent_delivery_saves_both_records_without_corrupting_history(tmp_p
             barrier.wait(timeout=3)
             path.write_bytes(f"file-{index}".encode())
             return path
+        account = settings["accounts"][index]
+        account["original_dir"] = str(tmp_path / "original_dir" / account["label"])
         return Delivery(history, reporter).deliver(f"account-{index}", f"file-{index}.gpg",
-            [tmp_path / "original_dir", tmp_path / "new_dir"], download)
+            selected_folders(settings, account), download)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(deliver, range(2)))
@@ -241,6 +244,12 @@ def test_concurrent_delivery_saves_both_records_without_corrupting_history(tmp_p
     saved = json.loads(history.path.read_text(encoding="utf-8"))
     assert len(saved["files"]) == 2
     assert all(len(record["destinations"]) == 2 for record in saved["files"].values())
+    for key in ("original_dir", "new_dir"):
+        folder = Path(settings[key])
+        assert {item.name for item in folder.iterdir()} == {"file-0.gpg", "file-1.gpg"}
+        assert all(item.is_file() for item in folder.iterdir())
+        assert (folder / "file-0.gpg").read_bytes() == b"file-0"
+        assert (folder / "file-1.gpg").read_bytes() == b"file-1"
 
 
 def test_equivalent_filenames_from_two_accounts_download_only_once(tmp_path):
