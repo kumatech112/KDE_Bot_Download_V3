@@ -7,12 +7,74 @@ import asyncio
 import os
 import tempfile
 import threading
+from datetime import datetime
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
 from .settings import atomic_json, default_settings, load_settings, save_settings
 from .storage import Delivery, History, Reporter, WorkerLock
+
+
+def check_outlook_folder_filter(root: Path) -> None:
+    """Use fake COM folders to verify the deployed scanner without reading real mail."""
+    from . import legacy_core as core
+    from .workflow import StructuredDownloader, make_engine_settings
+
+    class Items:
+        def __init__(self, values=(), reject_filter=False):
+            self.values = list(values)
+            self.reject_filter = reject_filter
+            self.restrict_calls = 0
+
+        @property
+        def Count(self):
+            return len(self.values)
+
+        def Item(self, index):
+            return self.values[index - 1]
+
+        def Restrict(self, _clause):
+            self.restrict_calls += 1
+            if self.reject_filter:
+                raise RuntimeError("Microsoft Outlook: Condition is not valid; filter failed")
+            return Items([item for item in self.values if getattr(item, "UnRead", False)])
+
+        def Sort(self, *_args):
+            pass
+
+    def message(entry_id, unread, item_class=43):
+        return SimpleNamespace(EntryID=entry_id, UnRead=unread, Class=item_class,
+                               ReceivedTime=datetime.now(), Subject="A1015_TEST_10102026.zip.gpg",
+                               Body="", Attachments=Items())
+
+    unread = message("offline-unread", True)
+    read = message("offline-read", False)
+    inbox = SimpleNamespace(Name="Inbox", DefaultItemType=0, StoreID="offline-store",
+                            Items=Items([unread, read, message("offline-note", True, 44)], True), Folders=Items())
+    notes = SimpleNamespace(Name="บันทึกย่อ", DefaultItemType=5,
+                            Items=Items([message("ignored-note", True, 44)], True), Folders=Items([inbox]))
+    mailbox = SimpleNamespace(Name="data@tradeconnection.co.th", DefaultItemType=0,
+                              Items=Items(), Folders=Items([notes]))
+    outlook = SimpleNamespace(GetNamespace=lambda _name: SimpleNamespace(Folders=Items([mailbox])))
+    settings = default_settings()
+    logs = root / "outlook-filter-check"
+    logs.mkdir()
+    history = History(logs)
+    events = []
+    reporter = Reporter(history, events.append)
+    scanner = StructuredDownloader(make_engine_settings(settings, root / "scan-state.json"),
+                                   reporter, Delivery(history, reporter), settings, threading.Event())
+    with patch.object(core, "win32_client", SimpleNamespace(Dispatch=lambda _name: outlook)), \
+            patch.object(core, "pythoncom", SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)):
+        for _ in range(2):
+            assert scanner.scan_mail_filenames()
+            assert [mail["entry_id"] for mail in scanner.mail_messages] == ["offline-unread"]
+    assert notes.Items.restrict_calls == 0
+    assert scanner.mail_failures == []
+    assert len(events) == 1 and events[0]["status"] == "notice"
+    assert unread.UnRead is True and read.UnRead is False
 
 
 def run_self_check(output: Path) -> int:
@@ -118,6 +180,8 @@ def run_self_check(output: Path) -> int:
                 mail_queue.finish({job_id: {"kind": "missing", "reason": "offline missing file"}}, 1482)
                 assert mail_queue.claim_ready(9999, set()) == {}
             result["checks"].append("Packaged durable mail queue: no idle session; 180-second delay; 300-second cooldown; two attempts total")
+            check_outlook_folder_filter(root)
+            result["checks"].append("Packaged Outlook scanner: skip Notes, scan mail children, recover rejected UnRead filter, ignore read/non-mail items; fake COM only")
         result["status"] = "passed"
         exit_code = 0
     except Exception as error:

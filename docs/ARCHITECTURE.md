@@ -27,6 +27,7 @@ Flow: per-user settings → validation → shared worker lock → pending-copy r
 | src/kde_bot/mail_queue.py | MailQueue.ingest, claim_ready, finish | Durable delay, two-attempt budget, account cooldown and terminal states |
 | src/kde_bot/mail_queue.py | recover_interrupted, requeue_failed, has_pending | Restart recovery without resetting attempts; explicitly initiated manual retry |
 | src/kde_bot/legacy_core.py | scan_mail_filenames, _login_with_retry | Read-only message metadata hook, including duplicate filenames; one login attempt per V3 session |
+| src/kde_bot/legacy_core.py | scan_mail_filenames.folder_contains_mail, is_mail_item, restrict_unread_items, scan_folder | Filter mail folders/items only; retain child traversal; bounded per-item UnRead fallback |
 | src/kde_bot/legacy_core.py | sync_playwright_without_console | Reference-count hidden driver launch across concurrent runtimes and restore after the last worker exits |
 | src/kde_bot/legacy_core.py | KdeDownloader._download_visible_pages | Add optional file callback after the existing matching filters; original behavior retained when absent |
 | src/kde_bot/gui.py | Application.build_controls, build_activity, build_result, build_settings | Plain Thai ttk GUI; work history replaces the fixed step checklist |
@@ -36,10 +37,15 @@ Flow: per-user settings → validation → shared worker lock → pending-copy r
 | src/kde_bot/gui.py | selected_details, copy_selected, show_selected | Readable Thai event details, including destination, machine, run and hash |
 | src/kde_bot/gui.py | close, wait_to_close, launch | Graceful worker shutdown and screenshot smoke |
 | src/kde_bot/selfcheck.py | run_self_check | Real packaged credential/storage/browser checks using temporary data |
+| src/kde_bot/selfcheck.py | check_outlook_folder_filter | Packaged fake-COM reproduction: Notes, mail child, mixed classes, fallback and unchanged read flags |
 | tools/build_portable.py | main, source_version | Local PyInstaller build, source-version metadata, pinned headless browser, signed Node wrapper and portable publish |
 | tools/promote_portable.py | validate_bundle, reject_running_bundle, main | Check verification hashes and running processes; promote within this project; remove only explicitly identified old KDE bundles |
 
 The 3.1.1 patch changes Application.__init__, build_controls, build_activity (replaces build_steps), start, drain_events, accept_event, render_activity, render_results, selected_details, show_selected, load_history and launch in gui.py; Reporter.__init__, _emit and append_activity plus Delivery.index, _index and existing in storage.py; all new activity.py helpers; build_portable.source_version/main; and promote_portable.main. Settings and portal/session/mail scheduling code are unchanged.
+
+The 3.1.2 patch changes legacy_core.KdeDownloader.scan_mail_filenames and its folder/item/filter helpers; workflow.StructuredDownloader.__init__/protocol_message and run_mail_monitor's recovery reporting; storage.Reporter._emit's informational event persistence; gui.STATUS_LABELS/launch smoke data; selfcheck.check_outlook_folder_filter/run_self_check; and the source VERSION. Credentials, portal operations, queue delay, cooldown and retry budgets are preserved.
+
+Outlook type constants follow [Microsoft's folder types](https://learn.microsoft.com/en-us/office/vba/api/outlook.olitemtype) and [object classes](https://learn.microsoft.com/en-us/office/vba/api/outlook.olobjectclass). Mail folders use DefaultItemType 0; MailItem Class is 43. Unknown providers retain the existing read-only per-item checks. A rejected UnRead restriction falls back within the configured item limit and reports one informational notice per folder per scanner; a subsequent folder access failure remains fatal to that scan.
 
 ## Preserved behavior
 

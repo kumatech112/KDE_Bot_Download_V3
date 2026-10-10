@@ -233,7 +233,7 @@ class Reporter:
         outcome_changed = persist and signature != previous.get("signature")
         activity_key = (account, filename, step)
         # Save business transitions, not every mailbox poll or file-existence check.
-        progress = ((not filename and status in {"running", "stage_complete", "summary"})
+        progress = ((not filename and status in {"running", "stage_complete", "summary", "notice"})
                     or (filename and step == 6 and status == "running")
                     or (persist and status in {"error", "warning", "copy_pending"}))
         progress_changed = progress and signature != self.activity_last.get(activity_key)

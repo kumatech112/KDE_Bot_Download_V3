@@ -63,6 +63,7 @@ class StructuredDownloader(core.KdeDownloader):
         self.stage = 3
         self.logout_failures: list[str] = []
         self.mail_failures: list[str] = []
+        self.reported_mail_fallbacks: set[str] = set()
         self.session_attempted = False
         self.file_handler = self.handle_file
         self.login_attempts = 1
@@ -105,7 +106,16 @@ class StructuredDownloader(core.KdeDownloader):
     def protocol_message(self, message: str) -> None:
         # Preserve technical evidence on actual failures, suppress filename chatter.
         lower = message.casefold()
-        if "mail watch:" in lower and any(text in lower for text in (
+        if lower.startswith("mail watch: unread filter fallback|"):
+            _prefix, folder, diagnostic = message.split("|", 2)
+            if folder.casefold() not in self.reported_mail_fallbacks:
+                self.reported_mail_fallbacks.add(folder.casefold())
+                self.reporter.emit(2, "notice",
+                                   f"Outlook ไม่รองรับตัวกรอง UnRead ใน {folder}; ตรวจสถานะเมลทีละรายการแทน (จำกัดตามจำนวนเมลที่ตั้งไว้) — {diagnostic}")
+            return
+        if lower.startswith("mail watch: skip folder "):
+            self.mail_failures.append("อ่านโฟลเดอร์อีเมลไม่ได้: " + message)
+        elif "mail watch:" in lower and any(text in lower for text in (
             "failed", "ไม่สำเร็จ", "ไม่พบ mailbox", "จึงสแกน outlook ไม่ได้",
             "เปิด outlook ไม่ได้", "เริ่ม outlook com ไม่ได้", "outlook com error",
         )):
@@ -345,6 +355,11 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
                     if scanner.mail_failures:
                         raise RuntimeError(" | ".join(scanner.mail_failures))
                     mail_queue.ingest(scanner.mail_messages, time.time())
+                    with history.lock:
+                        previous_scan = history.data["outcomes"].get("stage::2", {})
+                        if previous_scan.get("signature", [None, None])[1] in {"error", "warning"}:
+                            reporter.emit(2, "stage_complete",
+                                          f"อ่าน Outlook สำเร็จแล้ว — พบเมลที่ตรงกฎ {len(scanner.mail_messages)} รายการ")
                 except Exception as error:
                     reporter.emit(2, "error", f"Outlook: {type(error).__name__}: {error}", persist=True)
                     if not watch:

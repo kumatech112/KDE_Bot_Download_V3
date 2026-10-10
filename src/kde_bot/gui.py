@@ -28,6 +28,7 @@ STATUS_LABELS = {
     "skipped": "มีไฟล์ครบแล้ว", "copy_pending": "รอคัดลอก", "error": "ผิดพลาด",
     "warning": "ต้องตรวจสอบ", "summary": "สรุปรอบ",
     "waiting": "รอเมล / รอหน่วงเวลา",
+    "notice": "แจ้งข้อมูล",
 }
 MODES = {"เก็บทั้งสองที่ (ดาวน์โหลดเดิม แล้วคัดลอกใหม่)": "both",
          "เก็บเฉพาะที่เดิม": "original", "เก็บเฉพาะที่ใหม่": "new"}
@@ -603,6 +604,7 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
             app.tabs.select(app.activity_page)
             examples = [
                 ("10:00:00", 2, "waiting", "01 Pre", "พบอีเมล Payment ใหม่ — รอ 3 นาทีก่อนค้นหาไฟล์", "เมล Payment"),
+                ("10:00:01", 2, "notice", "", "Outlook ไม่รองรับตัวกรอง UnRead — ตรวจสถานะเมลทีละรายการแทน", ""),
                 ("10:03:00", 3, "stage_complete", "01 Pre", "เข้าสู่ระบบสำเร็จ", ""),
                 ("10:03:01", 3, "stage_complete", "02 Post", "เข้าสู่ระบบสำเร็จ — Session แยกจาก Pre", ""),
                 ("10:03:10", 4, "error", "01 Pre", "ครั้ง 1/2: ยังไม่พบไฟล์ของเมลนี้ — ปิด Session ก่อนลองใหม่", "เมล Payment"),

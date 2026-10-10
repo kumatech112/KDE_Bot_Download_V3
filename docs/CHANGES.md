@@ -1,4 +1,15 @@
-# KDE Bot Download V3 — 3.1.1
+# KDE Bot Download V3 — 3.1.2
+
+- Fix the Notes-folder `Condition is not valid` error by checking Outlook DefaultItemType before filtering items.
+- Skip non-mail folders while retaining traversal into their mail subfolders; ignore non-MailItem objects.
+- Treat successful bounded UnRead fallback as a Thai informational history event, once per folder per scanner.
+- Keep actual mailbox access failures as errors and retain unread flags without modifying Outlook items.
+- Clear prior scan errors after a successful monitor scan, retaining their chronological history.
+- Add regression and packaged fake-COM checks for Notes, rejected filters, limits and mixed item classes.
+
+Short commit message: fix: skip non-mail Outlook folders during KDE scan
+
+## 3.1.1
 
 - Replace the fixed eight-step page with chronological Thai work history.
 - Retain errors, fresh-login retries and later success as separate events; keep Complete/Error as latest outcomes.
@@ -9,7 +20,7 @@
 - Derive build version from source and require packaged history GUI evidence before promotion.
 - Confirm directory-cache misses from disk before another download, including delayed NTFS/SMB timestamps.
 
-Short commit message: feat: replace KDE checklist with work history
+Commit message: feat: replace KDE checklist with work history
 
 ## 3.1.0
 

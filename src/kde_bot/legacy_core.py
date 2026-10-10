@@ -1124,6 +1124,8 @@ class KdeDownloader:
             "mails_with_keys": 0,
             "auto_replies": 0,
             "restrict_failed": 0,
+            "non_mail_folders": 0,
+            "non_mail_items": 0,
             "attachments": 0,
             "attachments_with_keys": 0,
         }
@@ -1378,6 +1380,20 @@ class KdeDownloader:
         def folder_matches_filter(folder_path: str) -> bool:
             return not mailbox_filters or any(item in folder_path.lower() for item in mailbox_filters)
 
+        def folder_contains_mail(folder: Any) -> bool:
+            try:
+                # Outlook olMailItem = 0; Notes/Calendar/Contacts have other types.
+                return int(folder.DefaultItemType) == 0
+            except Exception:
+                # Older/custom stores may omit this property. Inspect each item below.
+                return True
+
+        def is_mail_item(item: Any) -> bool:
+            try:
+                return int(item.Class) == 43  # Outlook olMail object class.
+            except Exception:
+                return True
+
         def restrict_unread_items(items: Any, folder_path: str) -> Any:
             if not settings.unread_only:
                 return items
@@ -1389,7 +1405,7 @@ class KdeDownloader:
                     last_error = exc
             stats["restrict_failed"] += 1
             if stats["restrict_failed"] <= 10:
-                self.log(f"Mail Watch: unread restrict failed {folder_path}: {last_error}")
+                self.log(f"Mail Watch: unread filter fallback|{folder_path}|{type(last_error).__name__}: {last_error}")
             return items
 
         def scan_folder(folder: Any, folder_path: str, matched_filter: bool = False) -> None:
@@ -1399,7 +1415,10 @@ class KdeDownloader:
             scan_items = matched_filter or folder_matches_filter(folder_path)
             items = None
             count = 0
-            if scan_items:
+            mail_folder = folder_contains_mail(folder) if scan_items else False
+            if scan_items and not mail_folder:
+                stats["non_mail_folders"] += 1
+            if scan_items and mail_folder:
                 stats["folders_scanned"] += 1
                 try:
                     items = restrict_unread_items(folder.Items, folder_path)
@@ -1419,6 +1438,9 @@ class KdeDownloader:
                 try:
                     item = items.Item(index)
                 except Exception:
+                    continue
+                if not is_mail_item(item):
+                    stats["non_mail_items"] += 1
                     continue
                 received = received_datetime(item)
                 if settings.today_only and received and received < start:
@@ -1542,6 +1564,7 @@ class KdeDownloader:
         self.log(
             f"Mail Watch: scanned mailboxes={stats['roots']} folders_seen={stats['folders']} "
             f"folders_scanned={stats['folders_scanned']} folder_errors={stats['folders_failed']} "
+            f"non_mail_folders={stats['non_mail_folders']} non_mail_items={stats['non_mail_items']} "
             f"messages_scanned={stats['messages']} messages_unread={stats['unread']} "
             f"auto_replies={stats['auto_replies']} attachments={stats['attachments']} "
             f"attachments_with_keys={stats['attachments_with_keys']} "
