@@ -1,3 +1,10 @@
+# KDE Bot Download V3 — 3.5.1
+
+- Stop forward pagination at the first older-date boundary after downloading today's rows; select descending date sort when available and reject visibly inconsistent order. Preserve 30 rows/page, Pre then Post, .97 filename skips and 270/60-second timing.
+- Watch the whole configured data mailbox regardless of retained legacy folder filters. Resolve SMTP accounts to stores when mailbox display labels differ. Isolate unreadable messages/folders, retain healthy arrivals, and report partial scan coverage.
+- Show last mailbox check, today's mail count, scan warnings/errors and the queued 4:30 countdown on the main window. Record initial scan coverage and trigger deadlines without logging every poll.
+- Add metadata-to-queue-to-both-accounts integration coverage and browser regressions for 4,800 rows stopping on page one, sorting today's rows ahead of history and refusing visibly mixed unsortable dates.
+
 # KDE Bot Download V3 — 3.5.0
 
 - Fix the reported complete-catalogue page-limit failure by replacing the daily reverse/catalogue pass with forward, page-at-a-time downloads. Preserve completed files on later navigation errors.

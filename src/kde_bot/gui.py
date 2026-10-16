@@ -71,6 +71,8 @@ class Application(ttk.Frame):
         self.busy_buttons: list[Any] = []
         self.status = tk.StringVar(value='พร้อมใช้งาน')
         self.summary = tk.StringVar(value='ยังไม่มีรอบดาวน์โหลด')
+        self.mail_health = {}
+        self.mail_status = tk.StringVar(value='การตรวจเมล: ยังไม่ได้เริ่มทำงาน')
         self.current_step = tk.StringVar(value="เมลใหม่ → รอ 4 นาที 30 วินาที → ทำทีละบัญชี หน้าละ 30 รายการ → ตรวจไฟล์ซ้ำจาก .97")
         self.filter = tk.StringVar()
         self.follow_history = tk.BooleanVar(value=True)
@@ -139,6 +141,7 @@ class Application(ttk.Frame):
         bar.columnconfigure(1, weight=1)
         ttk.Label(bar, textvariable=self.status, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(bar, textvariable=self.summary).grid(row=0, column=1, sticky="e")
+        ttk.Label(bar, textvariable=self.mail_status).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
     def make_table(self, page, columns, headings, widths, row=0):
         page.columnconfigure(0, weight=1)
@@ -250,8 +253,7 @@ class Application(ttk.Frame):
         window.title('ตัวเลือกเพิ่มเติม')
         window.transient(self.root)
         window.columnconfigure(1, weight=1)
-        fields = [('โฟลเดอร์เมลย่อย (ถ้ามี)', "mail_watch.folder_path"),
-                  ('ตรวจเมลทุก (วินาที)', "mail_poll_seconds"), ('จำนวนเมลที่ตรวจต่อโฟลเดอร์', "mail_watch.max_messages_per_folder"),
+        fields = [('ตรวจเมลทุก (วินาที)', "mail_poll_seconds"), ('จำนวนเมลที่ตรวจต่อโฟลเดอร์', "mail_watch.max_messages_per_folder"),
                   ('เวลารอหน้าเว็บ (วินาที)', "page_timeout_seconds"),
                   ('พักระหว่างดาวน์โหลด (วินาที)', "download_delay_seconds"), ('ตำแหน่งเบราว์เซอร์ (ถ้ามี)', "chrome_path")]
         local = {}
@@ -408,6 +410,8 @@ class Application(ttk.Frame):
             messagebox.showerror('เริ่มทำงานไม่ได้', thai_text(str(error)), parent=self.root)
             return
         self.stop_event.clear()
+        self.mail_health = {}
+        self.mail_status.set('การตรวจเมล: กำลังเริ่มตรวจทุกโฟลเดอร์ขาเข้าของกล่องที่ตั้งค่าไว้')
         self.set_busy(True)
         self.tabs.select(self.monitor_page)
         self.status.set('กำลังเริ่มทำงาน' if mode in {"watch", "requeue"} else 'กำลังตรวจสอบ')
@@ -474,6 +478,9 @@ class Application(ttk.Frame):
         self.poll_id = self.root.after(100, self.drain_events)
 
     def accept_event(self, event: dict[str, Any]) -> None:
+        if event.get("kind") == "mail_health":
+            self.mail_health = event
+            return
         if event.get("kind") == "queue":
             self.jobs = {job["id"]: job for job in event["jobs"]}
             return
@@ -510,6 +517,19 @@ class Application(ttk.Frame):
         review = sum(job["status"] in {"review", "exhausted", "copy_pending"} for job in ordered)
         deferred = sum(job["status"] == "deferred" for job in ordered)
         self.summary.set(f"รอ {pending}   ·   เสร็จ {done}   ·   รอเมลใหม่ {deferred}   ·   ต้องตรวจสอบ {review}")
+        if self.mail_health:
+            checked = time.strftime('%H:%M:%S', time.localtime(self.mail_health['checked']))
+            if self.mail_health.get('error'):
+                self.mail_status.set(f"ตรวจเมล {checked} · ต้องตรวจสอบ: {thai_text(self.mail_health['error'])[:190]}")
+            else:
+                prefix = f"ตรวจเมลล่าสุด {checked} · เมลวันนี้ {self.mail_health.get('count', 0)} ฉบับ · ทุกโฟลเดอร์ขาเข้า"
+                waiting = self.jobs.get('pending-daily-round')
+                if waiting:
+                    remaining = max(0, int(waiting['due'] - time.time()))
+                    suffix = (f"รอดาวน์โหลด {remaining // 60}:{remaining % 60:02}" if remaining else "รอบพร้อมแล้ว รอบัญชีก่อนหน้าจบ")
+                else:
+                    suffix = 'กำลังดาวน์โหลด' if any(job['status'] == 'running' for job in ordered) else 'รอเมลใหม่'
+                self.mail_status.set(prefix + ' · ' + suffix)
 
     def render_activity(self) -> None:
         search = self.filter.get().casefold()
@@ -619,6 +639,16 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                                         "due": moment + (60 if index == 5 else 270), "sequence": index + 1, "lookup": {}, "last_reason": "ไฟล์ของวันนี้ หน้าละ 30 รายการ ตรวจว่ามีไฟล์แล้วจาก .97"}
                 if index == 5:
                     app.jobs[str(index)]["busy_sources"] = ["offline-post"]
+            pending = app.jobs.pop('1')
+            pending['id'] = 'pending-daily-round'
+            app.jobs[pending['id']] = pending
+            app.accept_event({'kind': 'mail_health', 'checked': moment, 'count': 12, 'new': 1, 'folders': 3, 'error': ''})
+            app.render_jobs()
+            mail_health_passed = 'ตรวจเมลล่าสุด' in app.mail_status.get() and 'รอดาวน์โหลด 4:' in app.mail_status.get()
+            app.accept_event({'kind': 'mail_health', 'checked': moment, 'error': 'อ่านโฟลเดอร์เมลไม่ได้'})
+            app.render_jobs()
+            mail_health_passed &= 'ต้องตรวจสอบ' in app.mail_status.get()
+            app.accept_event({'kind': 'mail_health', 'checked': moment, 'count': 12, 'new': 1, 'folders': 3, 'error': ''})
             for index in range(12):
                 reason = "ไม่มีสิทธิ์บันทึกไฟล์ปลายทาง" if index == 10 else ["พบเมลใหม่ รอ 4 นาที 30 วินาที", "ตรวจวันที่ปัจจุบันจากคอลัมน์บนเว็บ", 'เข้าสู่ระบบสำเร็จ', "ตรวจไฟล์ที่บันทึกไว้ใน .97", "ตรวจสอบไฟล์ดาวน์โหลดแล้ว", "บันทึกไฟล์ปลายทางแล้ว", "ออกจากระบบแล้ว"][index % 7]
                 app.accept_event({"key": f"sample-{index}", "time": f"{today()}T10:02:{index:02}+07:00", "step": 7 if index == 10 else 2 + index % 6,
@@ -676,6 +706,7 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                       "skip_either_destination": False, "busy_attempts_total": None,
                       "tracker_source": "new_dir", "sequential_accounts": True, "portal_rows_per_page": 30,
                       "page_by_page": True, "login_retry_unlimited": True,
+                      "mail_health_display_passed": mail_health_passed, "whole_mailbox_trigger": True, "stop_at_older_dates": True,
                       "includes_read_mail": not app.settings["mail_watch"]["unread_only"], "machine": socket.gethostname(), "live_portal_access": False}
             if smoke_report:
                 smoke_report.write_text(json.dumps(report, indent=2), encoding="utf-8")

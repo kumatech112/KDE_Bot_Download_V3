@@ -1,14 +1,16 @@
-# KDE Download — 3.5.0
+# KDE Download — 3.5.1
 
 Thai Windows GUI with การทำงาน (Monitor), ประวัติการทำงาน (History) and ตั้งค่า (Settings). Open **portable\KDE Bot Download V3.exe**; keep **_internal** beside it. The pinned browser is included. Python and OCR are not required on the deployment computer.
 
 ## Current workflow
 
 - Watch new incoming IDs in the configured **data@tradeconnection.co.th** classic Outlook mailbox, including read mail. No subject/body/image/keyword matching or mail mutation.
+- Daily mode watches all incoming folders even if a legacy subfolder filter remains saved. Identify an account by SMTP/store when its display label differs. A bad folder/message reports partial coverage and does not discard arrivals from healthy folders. The main window shows last scan time, today's mail count, scan failures and the pending download countdown.
 - New mail triggers a **270-second (4:30) wait**. Other arrivals join the same pending deadline. Mail during active work queues another round; after a successful account finishes, queued new-mail work waits at least another 270 seconds. No new mail means no idle browser loop.
 - Process accounts **sequentially: Pre, logout/close, then Post**. At most one browser account is active. A busy/unavailable login waits 60 seconds and retries until available or Stop. Known rejected credentials pause for correction.
 - Set the portal's rows-per-page control to **30**. Process today's files on the current page before advancing. Do not catalogue all pages or navigate backward before downloading.
 - Use only the visible KDE date column and today's Bangkok date. Blank/unreadable dates are excluded; no filename-date fallback.
+- Select descending date sort when available and stop at the first older-date boundary. A portal without a date-sort control must already show newest dates first; visibly increasing/mixed dates fail clearly rather than triggering a historical-page walk. No date can be inferred from a filename.
 - Check already-downloaded filenames only in **\\10.0.0.97\Z Bot KDE**. Existing nonempty .97 files are skipped. .243-only presence does not count and does not supply stale content to a normal download.
 - Save new downloads in .97 first, then optionally copy to .243. Never overwrite existing files. A conflicting .243 copy is reported while the new .97 file remains available.
 - A successful empty scan returns to waiting for new mail. Download/navigation failures retain completed files and wait for another mail/manual round; only login availability retries every minute.

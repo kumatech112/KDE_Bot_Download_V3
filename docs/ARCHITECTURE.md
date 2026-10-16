@@ -1,4 +1,18 @@
-# KDE 3.5.0 data flow and changed functions
+# KDE 3.5.1 data flow and changed functions
+
+## 3.5.1 changes by function
+
+| File | Functions/classes | Change |
+|---|---|---|
+| daily_download.py | ArrivalScan, scan_arrivals | Whole configured incoming mailbox; legacy folder filter bypassed only for daily policy; SMTP/store resolution; per-item/folder fault isolation; coverage warnings; stop sorted mail enumeration at yesterday |
+| daily_download.py | run_daily_monitor | Send scan-health events, log first scan/recovery and changed partial coverage, record trigger deadline; retain 270-second scheduling and serial account queue |
+| portal_pages.py | newest_first, check_date_order, download_pages | Select descending date sort, verify visible dates and page boundaries, stop when older dates begin, preserve current-page downloads |
+| gui.py | Application.__init__, build_controls, build_settings, start, accept_event, render_jobs, run.capture | Main scan-health/countdown line; remove obsolete subfolder control; handle diagnostic events; exercise countdown/error display in packaged smoke |
+| selfcheck.py | check_arrival_metadata, daily_fixture_html | Whole-mailbox legacy-filter and SMTP coverage; sortable native/custom portal fixture |
+
+The production CSV confirmed 21 downloads followed by 160 pages scanned on .97. It did not record a new-email event for the reported test; the exact live test-message cause cannot be established from those records. The identified legacy-folder and all-or-nothing scan paths are corrected, and live scan coverage is now visible. No subject/body/file-name matcher is added.
+
+Date-boundary stopping relies on newest-first server pagination. When available the date-header control is selected and aria-sort=descending is confirmed. Without a sort control the portal must already present newest-first order; visible date increases (including across page boundaries) are rejected. This avoids silently traversing history as a fallback. Today-only rows still use the portal date, and unknown dates are never downloaded.
 
 ## Current flow
 

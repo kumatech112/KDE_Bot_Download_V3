@@ -21,7 +21,7 @@ from .workflow import StructuredDownloader, make_engine_settings
 
 
 def portal_day(row: dict) -> str | None:
-    """The portal's dated row is authoritative; use a filename date only if absent."""
+    """Use the portal's dated row only; filenames are never date evidence."""
     text = row.get("file_time", "").strip()
     iso = re.search(r"(?<!\d)(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?!\d)", text)
     local = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", text)
@@ -47,21 +47,29 @@ def daily_folders(settings):
     return list(dict.fromkeys(folders))
 
 
+class ArrivalScan(list):
+    """Metadata arrivals plus explicit coverage diagnostics, without message contents."""
+
+    def __init__(self):
+        super().__init__()
+        self.folders = 0
+        self.warnings = []
+
+
 def scan_arrivals(settings: dict, stop_event: threading.Event) -> list[dict]:
     """Read only incoming mail IDs and received times; never read body or images."""
     if core.win32_client is None or core.pythoncom is None:
         raise RuntimeError("Classic Outlook and pywin32 are required on this computer.")
     filters = [value.strip().casefold() for value in re.split(r"[,;]+", settings["mail_watch"]["mailbox_filter"]) if value.strip()]
-    target = settings["mail_watch"].get("folder_path", "").replace("/", "\\").strip("\\ ").casefold()
+    # Daily mode watches the whole configured mailbox, including rule-moved mail.
+    # Retained legacy folder/content filters must not narrow an arrival trigger.
     excluded = {"sent items", "sent", "drafts", "outbox", "deleted items", "junk email", "junk e-mail",
                 "รายการที่ส่ง", "แบบร่าง", "กล่องขาออก", "รายการที่ถูกลบ", "อีเมลขยะ"}
-    result = []
+    result = ArrivalScan()
     matched_roots = 0
-    matched_folders = 0
     day = today()
 
     def walk(folder, root_name, relative=""):
-        nonlocal matched_folders
         if stop_event.is_set():
             return
         name = str(folder.Name)
@@ -73,64 +81,84 @@ def scan_arrivals(settings: dict, stop_event: threading.Event) -> list[dict]:
                 return
         except Exception:
             pass
-        inside = not target or relative.casefold() == target or relative.casefold().startswith(target + "\\")
-        if target and relative.casefold() == target:
-            matched_folders += 1
         try:
             mail_folder = int(folder.DefaultItemType) == 0
         except Exception:
             mail_folder = True
         path = root_name + ("\\" + relative if relative else "")
-        if inside and mail_folder:
+        if mail_folder:
             try:
                 items = folder.Items
-                items.Sort("[ReceivedTime]", True)
-                for index in range(1, min(int(items.Count), settings["mail_watch"]["max_messages_per_folder"]) + 1):
+                sorted_items = True
+                try:
+                    items.Sort("[ReceivedTime]", True)
+                except Exception:
+                    sorted_items = False
+                    result.warnings.append(f"เรียงเวลาเมลไม่ได้: {path}")
+                count = int(items.Count)
+                result.folders += 1
+                for index in range(1, min(count, settings["mail_watch"]["max_messages_per_folder"]) + 1):
                     if stop_event.is_set():
                         return
-                    item = items.Item(index)
-                    if int(item.Class) != 43:
-                        continue
-                    received = item.ReceivedTime
-                    if not isinstance(received, datetime):
-                        continue
-                    if received.tzinfo:
-                        received = received.astimezone(BANGKOK)
-                    if received.date().isoformat() != day:
-                        continue
-                    entry = str(item.EntryID or "")
-                    if not entry:
-                        raise RuntimeError("Outlook did not provide a stable mail ID.")
-                    result.append({"entry_id": entry, "store_id": str(folder.StoreID or ""),
-                                   "received": received.isoformat(), "folder": path})
+                    try:
+                        item = items.Item(index)
+                        if int(item.Class) != 43:
+                            continue
+                        received = item.ReceivedTime
+                        if not isinstance(received, datetime):
+                            raise ValueError("Outlook did not provide a received time")
+                        if received.tzinfo:
+                            received = received.astimezone(BANGKOK)
+                        received_day = received.date().isoformat()
+                        if received_day < day and sorted_items:
+                            break
+                        if received_day != day:
+                            continue
+                        entry = str(item.EntryID or "")
+                        if not entry:
+                            raise ValueError("Outlook did not provide a stable mail ID")
+                        result.append({"entry_id": entry, "store_id": str(folder.StoreID or ""),
+                                       "received": received.isoformat(), "folder": path})
+                    except Exception:
+                        result.warnings.append(f"อ่านข้อมูลเมลบางรายการไม่ได้: {path} รายการ {index}")
             except Exception as error:
-                raise RuntimeError(f"Cannot read incoming mail in {path}: {error}") from error
+                result.warnings.append(f"อ่านโฟลเดอร์เมลไม่ได้: {path}: {error}")
         try:
             children = folder.Folders
             for index in range(1, int(children.Count) + 1):
                 child = children.Item(index)
                 child_relative = relative + "\\" + str(child.Name) if relative else str(child.Name)
-                if not target or not relative or target.startswith(child_relative.casefold() + "\\") or child_relative.casefold().startswith(target) or child_relative.casefold() == target:
-                    walk(child, root_name, child_relative)
-        except RuntimeError:
-            raise
+                walk(child, root_name, child_relative)
         except Exception as error:
-            raise RuntimeError(f"Cannot enumerate incoming folders in {path}: {error}") from error
+            result.warnings.append(f"อ่านรายการโฟลเดอร์ย่อยไม่ได้: {path}: {error}")
 
     core.pythoncom.CoInitialize()
     try:
         namespace = core.win32_client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        smtp_stores = set()
+        try:
+            accounts = namespace.Accounts
+            for index in range(1, int(accounts.Count) + 1):
+                account = accounts.Item(index)
+                if str(account.SmtpAddress).casefold() in filters:
+                    smtp_stores.add(str(account.DeliveryStore.StoreID))
+        except Exception:
+            pass  # Shared stores can still be identified by their configured display name.
         roots = namespace.Folders
         for index in range(1, int(roots.Count) + 1):
             root = roots.Item(index)
             root_name = str(root.Name)
-            if any(value in root_name.casefold() for value in filters):
+            try:
+                store_match = str(root.StoreID) in smtp_stores
+            except Exception:
+                store_match = False
+            if store_match or any(value in root_name.casefold() for value in filters):
                 matched_roots += 1
                 walk(root, root_name)
         if not matched_roots:
             raise RuntimeError("Configured data mailbox was not found in classic Outlook.")
-        if target and not matched_folders:
-            raise RuntimeError("Configured incoming folder was not found: " + target)
+        if not result.folders and not stop_event.is_set():
+            raise RuntimeError("ไม่สามารถอ่านโฟลเดอร์เมลเข้าได้: " + "; ".join(result.warnings[:3]))
         return result
     finally:
         core.pythoncom.CoUninitialize()
@@ -414,6 +442,8 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
     next_scan = 0
     last_snapshot = None
     last_summary = None
+    last_scan_problem = None
+    first_scan = True
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="KDE-daily") as pool:
         while not stop_event.is_set():
             now = time.time()
@@ -434,10 +464,23 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
                         pending.request_round(time.time())
             if now >= next_scan:
                 try:
-                    added = pending.ingest(scan_arrivals(settings, stop_event), time.time())
+                    arrivals = scan_arrivals(settings, stop_event)
+                    added = pending.ingest(arrivals, time.time())
+                    warnings = getattr(arrivals, "warnings", [])
+                    problem = "; ".join(warnings[:3])
+                    reporter.callback({"kind": "mail_health", "checked": time.time(), "count": len(arrivals),
+                                       "folders": getattr(arrivals, "folders", None), "new": added, "error": problem})
+                    if first_scan or (last_scan_problem and not problem):
+                        reporter.emit(2, "notice", f"อ่านกล่องเมล {settings['mail_watch']['mailbox_filter']} ทุกโฟลเดอร์ขาเข้าแล้ว พบเมลวันนี้ {len(arrivals)} ฉบับ ตรวจทุก {settings['mail_poll_seconds']} วินาที ไม่ตรวจหัวเรื่องหรือชื่อไฟล์")
+                    if problem and problem != last_scan_problem:
+                        reporter.emit(2, "warning", problem, persist=True)
+                    last_scan_problem = problem
+                    first_scan = False
                     if added:
-                        reporter.emit(2, "waiting", f"พบเมลใหม่ {added} ฉบับ รอ 4 นาที 30 วินาทีก่อนดาวน์โหลดไฟล์ของวันนี้", persist=True)
+                        due = datetime.fromtimestamp(pending.state['pending_due'], BANGKOK).strftime('%H:%M:%S')
+                        reporter.emit(2, "waiting", f"พบเมลใหม่ {added} ฉบับ เข้าคิวดาวน์โหลดเวลา {due} หลังรอ 4 นาที 30 วินาที", persist=True)
                 except Exception as error:
+                    reporter.callback({"kind": "mail_health", "checked": time.time(), "error": str(error)})
                     reporter.emit(2, "error", str(error), persist=True, count=True)
                     if not watch:
                         break

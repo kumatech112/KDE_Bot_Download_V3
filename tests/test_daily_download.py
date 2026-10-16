@@ -155,6 +155,7 @@ def test_two_accounts_download_same_name_once_and_download_unrelated_names(setup
     jobs = [{"account": account["username"], "label": account["label"], "work_date": DAY, "sequence": 1} for account in settings["accounts"]]
     with patch.object(daily.DailyDownloader, "process_account", local_process), \
             patch("kde_bot.portal_pages.set_page_size", return_value=True), \
+            patch("kde_bot.portal_pages.newest_first"), \
             patch("kde_bot.portal_pages.page_range", return_value=None), \
             patch("kde_bot.portal_pages.next_button", return_value=None):
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -169,7 +170,7 @@ def test_two_accounts_download_same_name_once_and_download_unrelated_names(setup
         assert {path.name for path in Path(settings[key]).iterdir()} == set(downloads)
 
 
-def test_scanner_reads_only_metadata_in_data_mailbox_and_optional_folder(setup):
+def test_scanner_reads_only_metadata_in_whole_data_mailbox_despite_legacy_folder(setup):
     settings, history, reporter, events = setup
     class MetadataOnly:
         Class = 43
@@ -186,10 +187,80 @@ def test_scanner_reads_only_metadata_in_data_mailbox_and_optional_folder(setup):
         found = daily.scan_arrivals(settings, threading.Event())
         assert len(found) == 2 and all(item["entry_id"] == "plain-arrival" for item in found)
         settings["mail_watch"]["folder_path"] = "Inbox\\data"
-        assert len(daily.scan_arrivals(settings, threading.Event())) == 1
+        assert len(daily.scan_arrivals(settings, threading.Event())) == 2
         settings["mail_watch"]["folder_path"] = "missing"
-        with pytest.raises(RuntimeError, match="folder was not found"):
-            daily.scan_arrivals(settings, threading.Event())
+        assert len(daily.scan_arrivals(settings, threading.Event())) == 2
+
+
+def test_inaccessible_folder_and_bad_item_do_not_discard_healthy_arrival(setup):
+    settings, history, reporter, events = setup
+    class BrokenItems:
+        def Sort(self, *_args):
+            raise RuntimeError('Folder unavailable')
+        @property
+        def Count(self):
+            raise RuntimeError('Folder unavailable')
+    class BadItem:
+        @property
+        def Class(self):
+            raise RuntimeError('Corrupt message')
+    broken = folder('Archive')
+    broken.Items = BrokenItems()
+    inbox = folder('Inbox', [BadItem(), SimpleNamespace(Class=43, EntryID='new-incoming', ReceivedTime=datetime(2026, 10, 16, 14))])
+    root = folder(settings['mail_watch']['mailbox_filter'], children=[broken, inbox])
+    namespace = SimpleNamespace(Folders=Collection([root]))
+    with patch.object(core, 'win32_client', SimpleNamespace(Dispatch=lambda _name: SimpleNamespace(GetNamespace=lambda _name: namespace))), \
+            patch.object(core, 'pythoncom', SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)):
+        scan = daily.scan_arrivals(settings, threading.Event())
+    assert [mail['entry_id'] for mail in scan] == ['new-incoming']
+    assert len(scan.warnings) >= 2
+    pending = daily.DailyQueue(history, settings)
+    assert pending.ingest(scan, 10) == 1 and pending.state['pending_due'] == 280
+
+
+def test_smtp_account_identifies_mailbox_when_display_name_differs(setup):
+    settings, history, reporter, events = setup
+    root = folder('Trade Data Mailbox', children=[folder('Inbox', [SimpleNamespace(Class=43, EntryID='smtp-arrival', ReceivedTime=datetime(2026, 10, 16, 14))])])
+    account = SimpleNamespace(SmtpAddress=settings['mail_watch']['mailbox_filter'], DeliveryStore=SimpleNamespace(StoreID=root.StoreID))
+    namespace = SimpleNamespace(Folders=Collection([root]), Accounts=Collection([account]))
+    with patch.object(core, 'win32_client', SimpleNamespace(Dispatch=lambda _name: SimpleNamespace(GetNamespace=lambda _name: namespace))), \
+            patch.object(core, 'pythoncom', SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)):
+        assert daily.scan_arrivals(settings, threading.Event())[0]['entry_id'] == 'smtp-arrival'
+
+
+def test_mail_arriving_after_start_flows_from_metadata_to_both_accounts_and_health(setup, tmp_path):
+    settings, history, reporter, events = setup
+    clock = [0.0]
+    stop = threading.Event()
+    calls = []
+    inbox = folder('Inbox')
+    root = folder(settings['mail_watch']['mailbox_filter'], children=[inbox])
+    namespace = SimpleNamespace(Folders=Collection([root]))
+    real_wait = stop.wait
+    def advance(seconds):
+        real_wait(0.001)
+        clock[0] += seconds
+        if clock[0] >= 15 and not inbox.Items.values:
+            inbox.Items.values.append(SimpleNamespace(Class=43, EntryID='brand-new', ReceivedTime=datetime(2026, 10, 16, 14)))
+        if len(calls) == 2:
+            stop.set()
+        if clock[0] > 600:
+            raise AssertionError('Arrival did not trigger both accounts')
+        return stop.is_set()
+    def work(_settings, job, *_args):
+        calls.append((job['account'], clock[0]))
+        return {'kind': 'complete', 'reason': 'Today checked'}
+    with patch.object(core, 'win32_client', SimpleNamespace(Dispatch=lambda _name: SimpleNamespace(GetNamespace=lambda _name: namespace))), \
+            patch.object(core, 'pythoncom', SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)), \
+            patch('kde_bot.daily_download.time.time', side_effect=lambda: clock[0]), \
+            patch.object(stop, 'wait', side_effect=advance), \
+            patch('kde_bot.daily_download.run_daily_account', side_effect=work):
+        daily.run_daily_monitor(settings, stop, reporter, history, tmp_path, True, queues.Queue())
+    assert [account for account, _now in calls] == ['account-0', 'account-1']
+    assert all(now >= 285 for _account, now in calls)
+    health = [event for event in events if event.get('kind') == 'mail_health']
+    assert health[0]['count'] == 0 and any(event['new'] == 1 for event in health)
+    assert any(event.get('kind') == 'queue' and any(job['id'] == 'pending-daily-round' for job in event['jobs']) for event in events)
 
 
 def test_credential_error_waits_for_operator_even_if_more_mail_arrives(setup):
@@ -263,6 +334,7 @@ def test_existing_files_skip_without_per_file_delay(setup):
     engine._has_next_page = lambda _page: False
     with patch.object(engine, "handle_file", return_value="skipped"), \
             patch("kde_bot.portal_pages.set_page_size", return_value=True), \
+            patch("kde_bot.portal_pages.newest_first"), \
             patch("kde_bot.portal_pages.page_range", return_value=None), \
             patch("kde_bot.portal_pages.next_button", return_value=None), \
             patch.object(engine.stop_event, "wait", side_effect=AssertionError("Skipped files must not add a delay")):

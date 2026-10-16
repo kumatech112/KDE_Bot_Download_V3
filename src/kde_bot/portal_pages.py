@@ -103,14 +103,48 @@ def set_page_size(engine, page, timeout_ms):
     return True
 
 
+def newest_first(engine, page, timeout_ms):
+    """Select descending portal date order when the table exposes a sort control."""
+    headers = page.locator("th, [role='columnheader']").filter(has_text=re.compile(r"^(?:วัน\s*เวลา|วันที่(?:\s*/\s*เวลา)?|Date(?:\s*(?:/|and)?\s*Time)?)$", re.I))
+    if not headers.count():
+        return
+    header = headers.first
+    sortable = header.get_attribute("aria-sort") is not None or header.locator("button, .mat-sort-header-container, [role='button']").count()
+    if not sortable:
+        return
+    for _attempt in range(3):
+        if header.get_attribute("aria-sort") == "descending":
+            return
+        header.click(timeout=timeout_ms)
+        if not wait_ready(engine, page, timeout_ms):
+            return
+    if header.get_attribute("aria-sort") != "descending":
+        raise RuntimeError("ตั้งคอลัมน์วันเวลาเป็นใหม่ไปเก่าไม่สำเร็จ จึงไม่ไล่ตรวจหน้าข้อมูลเก่า")
+
+
+def check_date_order(rows, previous_day=None):
+    """Reject visible ascending/mixed dates before using the older-date boundary."""
+    from .daily_download import portal_day
+
+    dates = [day for _index, row in rows if (day := portal_day(row)) is not None]
+    sequence = ([previous_day] if previous_day else []) + dates
+    if any(left < right for left, right in zip(sequence, sequence[1:])):
+        raise RuntimeError("วันเวลาใน KDE ไม่เรียงจากใหม่ไปเก่า กรุณาเรียงคอลัมน์วันเวลาใหม่ก่อนเริ่ม ไม่ไล่ตรวจทุกหน้าหรือข้ามไฟล์โดยเดา")
+    if rows and not dates:
+        raise RuntimeError("อ่านวันที่ในหน้ารายการ KDE ไม่ได้ จึงหยุดโดยไม่ไล่ตรวจหน้าข้อมูลเก่า")
+    return dates
+
+
 def download_pages(engine, page, account, timeout_ms):
     from .daily_download import portal_day, today
 
     result = {"downloaded": 0, "skipped": 0, "not_requested": 0, "errors": 0}
     if not set_page_size(engine, page, timeout_ms):
         return result
+    newest_first(engine, page, timeout_ms)
     processed = set()
     visited = set()
+    previous_day = None
     initial_range = page_range(page)
     # A retained small matching-catalogue limit must not block today's downloads.
     budget = max(50, engine.settings.max_pages, math.ceil(initial_range[2] / 30) + 2 if initial_range else 0)
@@ -118,6 +152,7 @@ def download_pages(engine, page, account, timeout_ms):
         if engine.stop_event.is_set() or today() != engine.work_day:
             return result
         rows = engine._table_rows(page)
+        check_date_order(rows, previous_day)
         current = rows
         fingerprint = tuple((row["filename"], row.get("file_time", ""), row.get("size_text", "")) for _index, row in rows)
         if fingerprint in visited and fingerprint:
@@ -126,6 +161,7 @@ def download_pages(engine, page, account, timeout_ms):
         engine.reporter.emit(4, "running", f"กำลังดาวน์โหลดไฟล์ของวันนี้จากหน้า {page_number} ทีละรายการ", account.label)
         while not engine.stop_event.is_set() and today() == engine.work_day:
             current = engine._table_rows(page)
+            check_date_order(current, previous_day)
             candidate = next(((index, row) for index, row in current
                               if portal_day(row) == engine.work_day and row["filename"].casefold() not in processed), None)
             if candidate is None:
@@ -139,6 +175,12 @@ def download_pages(engine, page, account, timeout_ms):
                 return result
         engine.rejected_dates += sum(portal_day(row) != engine.work_day for _index, row in current)
         engine.reporter.emit(4, "stage_complete", f"เสร็จหน้า {page_number}: ดาวน์โหลด {result['downloaded']} มีไฟล์แล้ว {result['skipped']} ต่างวันหรือวันที่ไม่ชัดเจน {engine.rejected_dates} ผิดพลาด {result['errors']}", account.label)
+        dates = check_date_order(current, previous_day)
+        if any(day < engine.work_day for day in dates):
+            engine.reporter.emit(4, "stage_complete", "ตรวจไฟล์วันนี้ครบถึงขอบเขตวันที่เก่าแล้ว หยุดโดยไม่เปิดหน้าประวัติย้อนหลัง", account.label)
+            return result
+        if dates:
+            previous_day = dates[-1]
         remaining = page_range(page)
         if remaining and remaining[1] >= remaining[2]:
             return result

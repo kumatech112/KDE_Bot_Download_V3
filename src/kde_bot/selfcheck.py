@@ -508,7 +508,11 @@ def check_arrival_metadata(root: Path) -> None:
         assert len(scan_arrivals(settings, threading.Event())) == 2
         settings["mail_watch"]["folder_path"] = "Inbox\\data"
         found = scan_arrivals(settings, threading.Event())
-        assert len(found) == 1 and found[0]["entry_id"] == Metadata.EntryID
+        assert len(found) == 2 and found[0]["entry_id"] == Metadata.EntryID
+        root_folder.Name = "Data mailbox display label"
+        namespace.Accounts = Collection([SimpleNamespace(SmtpAddress=settings['mail_watch']['mailbox_filter'], DeliveryStore=SimpleNamespace(StoreID=root_folder.StoreID))])
+        namespace.Folders.values[1].StoreID = "unrelated-store"
+        assert len(scan_arrivals(settings, threading.Event())) == 2
 
 
 def check_daily_queue(root: Path) -> None:
@@ -557,11 +561,14 @@ def daily_fixture_html(rows, custom_select=False, remove_rows=False):
     control = ("<div role='combobox' tabindex='0' onclick=\"document.querySelector('[role=listbox]').hidden=false\">15</div>"
                "<div role='listbox' hidden><div role='option' onclick='resize(30)'>30</div></div>" if custom_select else
                "<select onchange='resize(Number(this.value))'><option>15</option><option>30</option></select>")
-    return ("<table><tbody></tbody></table><div data-kde-pagination>จำนวนแถวต่อ 1 หน้า " + control +
+    return ("<table><thead><tr><th></th><th>File</th><th aria-sort='none' onclick='sortDates()'>วัน เวลา</th></tr></thead><tbody></tbody></table><div data-kde-pagination>จำนวนแถวต่อ 1 หน้า " + control +
             "<span id='range'></span><button id='first' aria-label='Go to first page' onclick='turn(0)'>First</button>"
             "<button id='next' aria-label='Go to next page' onclick='turn(window.pageIndex+1)'>Next</button></div><script>"
-            "window.rows=" + json.dumps(rows) + ";window.removeRows=" + json.dumps(remove_rows) + ";" + """
+            "window.rows=" + json.dumps(rows) + ";window.removeRows=" + json.dumps(remove_rows) + ";" + r"""
             window.pageIndex=0;window.pageSize=15;window.events=[];
+            function dateKey(value){const match=value.match(/(\d{2})\/(\d{2})\/(\d{4})/);return match?match[3]+match[2]+match[1]:'00000000';}
+            function sortDates(){window.rows.sort((left,right)=>dateKey(right[1]).localeCompare(dateKey(left[1])));
+              window.pageIndex=0;document.querySelector('th[aria-sort]').setAttribute('aria-sort','descending');render();}
             function resize(size){window.pageSize=size;window.pageIndex=0;window.events.push('size:'+size);
               const custom=document.querySelector('[role=combobox]');if(custom){custom.textContent=size;document.querySelector('[role=listbox]').hidden=true;}render();}
             function turn(index){window.events.push('next:'+index);window.pageIndex=index;
@@ -735,7 +742,7 @@ def run_self_check(output: Path) -> int:
             assert asyncio.create_subprocess_exec is original_subprocess_factory
             result["checks"].append("Sequential packaged browser processes with isolated account cookies; offline")
             check_arrival_metadata(root)
-            result["checks"].append("Incoming data mailbox IDs only; read mail included; no subject/body/images read; optional folder and outgoing/Notes exclusions; fake COM only")
+            result["checks"].append("Whole data mailbox incoming IDs only; read mail included; no subject/body/images read; legacy folder ignored; SMTP/store resolution; outgoing/Notes excluded; fake COM only")
             check_daily_queue(root)
             result["checks"].append("270-second arrival window, persisted mail IDs, sequential accounts, busy retry beyond two attempts at 60 seconds, restored 270-second cooldown after success, no idle portal loop")
             check_flat_storage(root)
