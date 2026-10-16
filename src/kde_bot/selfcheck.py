@@ -184,6 +184,106 @@ def check_portal_paging(root: Path) -> None:
             browser.close()
 
 
+def check_joint_search_round(root: Path) -> None:
+    """Run both native browser workers and real delivery using local HTML only."""
+    from . import legacy_core as core
+    from .mail_queue import MailQueue
+    from .search_round import run_search_round
+    from .workflow import StructuredDownloader
+
+    settings = default_settings()
+    settings["accounts"][0].update(username="offline-round-pre", password="offline-only")
+    settings["accounts"][1].update(username="offline-round-post", password="offline-only")
+    settings["download_delay_seconds"] = 0
+    for key in ("original_dir", "new_dir", "log_dir"):
+        folder = root / ("round-" + key)
+        folder.mkdir()
+        settings[key] = str(folder)
+    history = History(Path(settings["log_dir"]))
+    reporter = Reporter(history, lambda _event: None)
+    queue = MailQueue(history, reporter, settings, "2026-10-16")
+    filename = "A1015_PAYMENT_ONLINE_67097_16102026.zip.gpg"
+    queue.ingest([{"entry_id": "offline-joint-round", "subject": "Pre", "side": "pre",
+                   "received": "2026-10-16T10:00:00", "work_date": "2026-10-16",
+                   "lookup": {core.normalize_filename_for_match(filename): filename}}], 1000)
+    job = queue.claim_ready(1060, set())["offline-round-pre"][0]
+    visited = []
+    closed = []
+    payload = "offline joint round payload"
+
+    def local_login(engine, _page, account, _timeout):
+        engine.session_attempted = True
+        engine.session_owned = True
+        visited.append(account.username)
+
+    def local_catalogue(engine, page, _timeout):
+        engine.stage = 4
+        names = [] if engine.source_username.endswith("-pre") else [filename]
+        page.set_content("""<table><tbody></tbody></table><script>
+            const names=""" + json.dumps(names) + ";const payload=" + json.dumps(payload) + """;
+            document.querySelector('tbody').innerHTML=names.map((name,index)=>
+            '<tr><td>'+(index+1)+'</td><td>'+name+'</td><td>16/10/2026</td><td>1 MB</td><td><button>Download</button></td></tr>').join('');
+            document.querySelectorAll('button').forEach((button,index)=>button.onclick=()=>{
+                const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([payload],{type:'application/octet-stream'}));
+                link.download=names[index];link.click();});</script>""")
+
+    def local_logout(engine, _page, account, _timeout):
+        closed.append(account.username)
+        engine.session_owned = False
+
+    with patch.object(StructuredDownloader, "_login_with_retry", local_login), \
+            patch.object(StructuredDownloader, "_open_download_page", local_catalogue), \
+            patch.object(StructuredDownloader, "_logout_browser_session", local_logout), \
+            patch.object(StructuredDownloader, "_post_auth", side_effect=AssertionError("Account-wide reset is forbidden")):
+        outcomes = run_search_round(settings, [job], threading.Event(), reporter, history, root)
+    assert outcomes[job["id"]]["kind"] == "complete", outcomes
+    assert set(visited) == set(closed) == {"offline-round-pre", "offline-round-post"}
+    assert len(visited) == len(closed) == 2
+    for key in ("original_dir", "new_dir"):
+        folder = Path(settings[key])
+        assert {path.name for path in folder.iterdir()} == {filename}
+        assert (folder / filename).read_text() == payload
+    records = list(history.data["files"].values())
+    assert len(records) == 1 and records[0]["mail_jobs"] == [job["id"]]
+
+
+def check_round_timing(root: Path) -> None:
+    """Verify durable round deadlines and a busy wait without portal access."""
+    from .mail_queue import MailQueue
+    settings = default_settings()
+    settings["accounts"][0]["username"] = "offline-timing-pre"
+    settings["accounts"][1]["username"] = "offline-timing-post"
+    logs = root / "round-timing"
+    logs.mkdir()
+    history = History(logs)
+    reporter = Reporter(history, lambda _event: None)
+    queue = MailQueue(history, reporter, settings)
+    first = {"entry_id": "timing-first", "subject": "Pre", "lookup": {"payment online 67097": "payment online 67097"}}
+    queue.ingest([first], 100)
+    queue.ingest([{**first, "entry_id": "timing-second"}], 130)
+    assert {job["due"] for job in queue.jobs.values()} == {160}
+    job = queue.claim_ready(160, set())["offline-timing-pre"][0]
+    queue.finish({job["id"]: {"kind": "missing", "reason": "offline missing"}}, 161)
+    assert queue.claim_ready(161, set())["offline-timing-pre"][0]["attempts"] == 2
+    queue.ingest([{**first, "entry_id": "timing-new-round", "subject": "Post"}], 180)
+    queue.finish({job["id"]: {"kind": "missing", "reason": "offline still missing"}}, 200)
+    assert queue.jobs[job["id"]]["due"] == 240 and queue.jobs[job["id"]]["attempts"] == 0
+    resumed_history = History(logs)
+    resumed = MailQueue(resumed_history, Reporter(resumed_history, lambda _event: None), settings)
+    resumed.recover_interrupted(210)
+    assert resumed.jobs[job["id"]]["due"] == 240
+    assert resumed.claim_ready(239, set()) == {}
+    batches = resumed.claim_ready(240, set())
+    for batch in batches.values():
+        for active in batch:
+            resumed.finish({active["id"]: {"kind": "account_busy", "reason": "offline busy",
+                                           "sources": ["offline-timing-post"], "retry_at": 300}}, 241)
+            assert resumed.jobs[active["id"]]["attempts"] == 0
+            assert resumed.jobs[active["id"]]["due"] == 300
+    resumed.recover_interrupted(250)
+    assert resumed.jobs[job["id"]]["due"] == 300
+
+
 def check_agent_features(root: Path) -> None:
     from PIL import Image, ImageDraw, ImageFont
     from .evidence import LocalOCR, MailEvidenceReader, reference_lookup, today
@@ -211,14 +311,14 @@ def check_agent_features(root: Path) -> None:
     reporter = Reporter(history, lambda _event: None)
     queue = MailQueue(history, reporter, settings, today())
     queue.ingest([screenshot, {**screenshot, "entry_id": "second-request"}], 1000)
-    assert queue.claim_ready(1119, set()) == {}
-    first = queue.claim_ready(1120, set())["offline-pre"]
-    assert len(first) == 1 and queue.claim_ready(1121, set()) == {}
-    queue.finish({first[0]["id"]: {"kind": "login_failed", "reason": "offline busy user"}}, 1122)
-    assert queue.claim_ready(1421, set()) == {}
-    assert queue.claim_ready(1422, set())["offline-pre"][0]["id"] == first[0]["id"]
-    queue.finish({first[0]["id"]: {"kind": "complete", "reason": "offline success"}}, 1423)
-    assert queue.claim_ready(1423, set())["offline-pre"][0]["id"] != first[0]["id"]
+    assert queue.claim_ready(1059, set()) == {}
+    first = queue.claim_ready(1060, set())["offline-pre"]
+    assert len(first) == 1 and queue.claim_ready(1061, set()) == {}
+    queue.finish({first[0]["id"]: {"kind": "login_failed", "reason": "offline login failure"}}, 1062)
+    assert queue.claim_ready(1121, set()) == {}
+    assert queue.claim_ready(1122, set())["offline-pre"][0]["id"] == first[0]["id"]
+    queue.finish({first[0]["id"]: {"kind": "complete", "reason": "offline success"}}, 1123)
+    assert queue.claim_ready(1123, set())["offline-pre"][0]["id"] != first[0]["id"]
     cache = settings_home() / "cache"
     cache.mkdir(parents=True, exist_ok=True)
     source = cache / "packaged-source.download"
@@ -464,15 +564,16 @@ def run_self_check(output: Path) -> int:
                            "lookup": {"payment online 67097": "payment online 67097"}}
                 assert mail_queue.claim_ready(0, set()) == {}
                 mail_queue.ingest([message], 1000)
-                assert mail_queue.claim_ready(1119, set()) == {}
-                batch = mail_queue.claim_ready(1120, set())["offline-user"]
+                assert mail_queue.claim_ready(1059, set()) == {}
+                batch = mail_queue.claim_ready(1060, set())["offline-user"]
                 job_id = batch[0]["id"]
-                mail_queue.finish({job_id: {"kind": "login_failed", "reason": "offline failure"}}, 1181)
-                assert mail_queue.claim_ready(1480, set()) == {}
-                assert mail_queue.claim_ready(1481, set())["offline-user"][0]["attempts"] == 2
-                mail_queue.finish({job_id: {"kind": "missing", "reason": "offline missing file"}}, 1482)
+                mail_queue.finish({job_id: {"kind": "login_failed", "reason": "offline failure"}}, 1061)
+                assert mail_queue.claim_ready(1120, set()) == {}
+                assert mail_queue.claim_ready(1121, set())["offline-user"][0]["attempts"] == 2
+                mail_queue.finish({job_id: {"kind": "missing", "reason": "offline missing file"}}, 1122)
                 assert mail_queue.claim_ready(9999, set()) == {}
-            result["checks"].append("Packaged durable mail queue: no idle session; 120-second delay; 300-second cooldown; two attempts total")
+                assert mail_queue.jobs[job_id]["status"] == "deferred"
+            result["checks"].append("Packaged durable mail queue: fixed 60-second window; two attempts per round; then defer until a new relevant email")
             check_outlook_folder_filter(root)
             result["checks"].append("Packaged Outlook scanner: skip Notes, scan mail children, recover rejected UnRead filter, ignore read/non-mail items; fake COM only")
             check_flat_storage(root)
@@ -480,11 +581,15 @@ def run_self_check(output: Path) -> int:
             check_destination_preflight(root)
             result["checks"].append("Destination preflight creates no probe files and succeeds with business-folder writes denied; existing files preserved; Log probe retained")
             check_agent_features(root)
-            result["checks"].append("Actual bundled English/Thai OCR reads a sample screenshot; strict FIFO, two-minute delay, busy-user retry and final-filename-only publication passed offline")
+            result["checks"].append("Actual bundled English/Thai OCR reads a sample screenshot; FIFO, one-minute window and final-filename-only publication passed offline")
             check_portal_catalogue(root)
             result["checks"].append("Actual offline browser: previous/next pagination, cross-page ambiguity rejection and precise-reference precedence before any click")
             check_portal_paging(root)
             result["checks"].append("Actual offline browser: delayed tables with background polling, shorter reverse delivery, fresh row indexes, stalled navigation refusal and Stop cancellation")
+            check_joint_search_round(root)
+            result["checks"].append("Actual two-source round: Pre request found only in Post; both native catalogues checked; one browser download published to both flat roots with linked mail history; no account-wide reset")
+            check_round_timing(root)
+            result["checks"].append("Fixed coalesced mail deadline; new mail during final retry starts the next round at its existing deadline; restart preserves timing; busy waits do not consume attempts")
             check_body_instructions(root)
             result["checks"].append("Body instructions: 1015 fallback, generic account templates, unknown-date placeholders, legal-type numbers and monthly filenames; foreign company and company-only references rejected")
         result["status"] = "passed"

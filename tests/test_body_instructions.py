@@ -93,8 +93,9 @@ def test_company_keyword_alone_or_unknown_side_never_selects_arbitrary_files(tmp
     queue.ingest([{"entry_id": "only-company", "subject": "Notice", "lookup": evidence["lookup"]},
                   {"entry_id": "unknown-side", "subject": "Notice", "lookup": instruction_lookup("Axxxx payment online 67097")}], 0)
     assert len(queue.jobs) == 2
-    assert all(job["status"] == "review" for job in queue.jobs.values())
-    assert queue.claim_ready(9999, set()) == {}
+    assert next(job for job in queue.jobs.values() if job["subject"] == "Notice" and not job["lookup"])["status"] == "review"
+    searchable = next(job for job in queue.jobs.values() if job["lookup"])
+    assert searchable["status"] == "waiting" and searchable["search_any_side"]
 
 
 def test_body_partial_matches_reject_business_number_changes_and_ambiguity(tmp_path):

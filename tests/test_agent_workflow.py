@@ -101,34 +101,37 @@ def test_fifo_blocks_overtaking_and_allows_other_account_to_work(tmp_path):
 def test_unknown_side_requires_review_and_confirmation_keeps_deduplication(tmp_path):
     settings, history, events, reporter, queue = setup_queue(tmp_path)
     incoming = message("unknown", side="", filenames=["payment online 67097"])
+    incoming["review"] = True
     queue.ingest([incoming], 100)
     job = next(iter(queue.jobs.values()))
     assert job["status"] == "review" and queue.claim_ready(999, set()) == {}
     queue.resolve(job["id"], "account-1", "A1015L_PAYMENT_ONLINE_67097_16102026.zip.gpg", 1000)
     assert queue.ingest([incoming], 1001) == 0
-    assert queue.claim_ready(1119, set()) == {}
-    assert queue.claim_ready(1120, set())["account-1"][0]["id"] == job["id"]
+    assert queue.claim_ready(1059, set()) == {}
+    assert queue.claim_ready(1060, set())["account-1"][0]["id"] == job["id"]
 
 
 def test_review_cannot_assign_post_reference_to_pre(tmp_path):
     settings, history, events, reporter, queue = setup_queue(tmp_path)
-    queue.ingest([message(side="", filenames=["payment online 67097"])], 0)
+    incoming = message(side="", filenames=["payment online 67097"])
+    incoming["review"] = True
+    queue.ingest([incoming], 0)
     job = next(iter(queue.jobs.values()))
     with pytest.raises(ValueError, match="other account"):
         queue.resolve(job["id"], "account-0", "A10XXL_PAYMENT_16102026.zip.gpg", 100)
     assert job["status"] == "review"
 
 
-def test_previous_day_waiting_jobs_expire_without_new_login(tmp_path):
+def test_pending_requests_survive_day_change_with_original_business_date(tmp_path):
     settings, history, events, reporter, queue = setup_queue(tmp_path)
     old = message()
     old["received"] = (datetime.now(BANGKOK) - timedelta(days=1)).isoformat()
     queue.ingest([old], 0)
     scoped = MailQueue(history, reporter, settings, today())
     scoped.recover_interrupted(1000)
-    assert scoped.claim_ready(9999, set()) == {}
-    assert next(iter(scoped.jobs.values()))["status"] == "expired"
-    assert next(iter(History(tmp_path / "log_dir").data["mail_jobs"].values()))["status"] == "expired"
+    assert scoped.claim_ready(9999, set())["account-0"][0]["work_date"] == old["received"][:10]
+    assert next(iter(scoped.jobs.values()))["status"] == "running"
+    assert next(iter(History(tmp_path / "log_dir").data["mail_jobs"].values()))["status"] == "running"
 
 
 def test_wildcard_post_reference_routes_only_to_post(tmp_path):
@@ -324,7 +327,7 @@ def test_a_newest_first_outlook_scan_is_queued_in_received_order(tmp_path):
     assert first["received"] == older["received"]
 
 
-def test_old_day_pending_save_does_not_invisibly_block_new_day_work(tmp_path):
+def test_old_day_pending_save_remains_visible_until_verified_repair(tmp_path):
     settings, history, events, reporter, queue = setup_queue(tmp_path)
     queue.ingest([message("old")], 0)
     job = queue.claim_ready(120, set())["account-0"][0]
@@ -332,8 +335,9 @@ def test_old_day_pending_save_does_not_invisibly_block_new_day_work(tmp_path):
     queue.jobs[job["id"]]["work_date"] = "2000-01-01"
     scoped = MailQueue(history, reporter, settings, today())
     scoped.ingest([message("today")], 200)
-    assert scoped.claim_ready(320, set())["account-0"][0]["id"] != job["id"]
-    assert scoped.jobs[job["id"]]["status"] == "expired"
+    assert scoped.claim_ready(320, set()) == {}
+    assert scoped.jobs[job["id"]]["status"] == "copy_pending"
+    assert any(item["id"] == job["id"] for item in scoped.snapshot())
 
 
 def test_download_pass_walks_back_only_to_the_page_with_a_selected_file(tmp_path):

@@ -1,4 +1,4 @@
-# KDE Download — 3.2.4
+# KDE Download — 3.3.0
 
 A dedicated Windows KDE downloader with a small English interface: **Monitor**, **History**, and **Settings**. Native ttk controls, no theme selector.
 
@@ -15,10 +15,12 @@ Read [Quick Start](docs/QUICK_START.md) for setup and daily use.
 - Starts monitoring automatically after valid local account setup.
 - Tracks today's incoming Outlook messages in Bangkok time, including read mail; processed message IDs prevent repeated work.
 - Uses subject/body references, attachment filenames and local image OCR. **Import image** supports separate screenshots.
-- Waits **two minutes** after discovery, then queues the matching Pre/Post account.
-- Each account handles one request at a time, in order. The two accounts can work concurrently. New requests cannot overtake an earlier request or its retry.
-- No idle KDE login loop. Two attempts total per request, fresh logout/session between attempts; busy/login failures wait five minutes.
-- Checks account, business numbers, dates and full-catalogue ambiguity before downloading. Unclear OCR/routing is visible for review.
+- Uses a fixed **one-minute window** from discovery. Mail arriving in an open window joins its existing deadline; the wait never restarts or accumulates.
+- Searches the complete catalogues of **both enabled KDE accounts** before selecting files. The two isolated browsers run concurrently within one search round; another round waits for cleanup.
+- Retains FIFO request order per business side. Two attempts total per round: the first attempt plus one fresh-session retry. Missing/download failures retry immediately after logout; ordinary login failures wait 60 seconds.
+- After two failures, **Waiting for new email** requests are retried when a genuinely new relevant email starts another round. Duplicate scans never wake them. Pending requests survive midnight and restart with their original business dates.
+- A confirmed busy account is checked every 60 seconds until available, without consuming the two attempts or forcing another person out. Only busy sources are probed during that wait; full matching resumes with fresh catalogues from both sources. Rejected credentials require review.
+- Checks company, business side, numbers, dates and cross-account/cross-page ambiguity. Meaningful references without a side search both; conflicting candidates or weak OCR require review.
 - Downloads and validates locally, then publishes only the final business filename. No destination test files, logs, account folders or .part sidecars. Existing content is preserved.
 - Retains failed-save sources locally for repair without another portal download. Shared state and monthly CSV preserve attempts, outcomes and history.
 

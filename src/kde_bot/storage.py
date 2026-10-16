@@ -178,7 +178,7 @@ class History:
             raise ValueError("Invalid outcome or queue history. Check KDE_State.json.")
         for key, job in self.data["mail_jobs"].items():
             if (not isinstance(job, dict) or job.get("id") != key
-                    or job.get("status") not in {"waiting", "running", "complete", "copy_pending", "exhausted", "review", "expired"}
+                    or job.get("status") not in {"waiting", "running", "complete", "copy_pending", "exhausted", "deferred", "review", "expired"}
                     or not isinstance(job.get("lookup"), dict)
                     or not all(isinstance(value, str) for pair in job.get("lookup", {}).items() for value in pair)
                     or not isinstance(job.get("attempts"), int) or not 0 <= job["attempts"] <= 2
@@ -188,6 +188,23 @@ class History:
         cooldowns = self.data.get("account_cooldowns", {})
         if not isinstance(cooldowns, dict) or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in cooldowns.values()):
             raise ValueError("Invalid login cooldown data. Check KDE_State.json.")
+        busy_sources = self.data.get("busy_search_accounts", {})
+        if not isinstance(busy_sources, dict) or not all(isinstance(key, str) and isinstance(value, (int, float))
+                                                        and math.isfinite(value) for key, value in busy_sources.items()):
+            raise ValueError("Invalid busy-account retry state. Check KDE_State.json.")
+        blocked_sources = self.data.get("blocked_search_accounts", {})
+        if not isinstance(blocked_sources, dict) or not all(isinstance(key, str) and isinstance(value, str)
+                                                           for key, value in blocked_sources.items()):
+            raise ValueError("Invalid credential attention state. Check KDE_State.json.")
+        generation = self.data.get("mail_generation", 0)
+        deadline = self.data.get("mail_window_due", 0)
+        if not isinstance(generation, int) or generation < 0 or not isinstance(deadline, (int, float)) or not math.isfinite(deadline):
+            raise ValueError("Invalid mail-window state. Check KDE_State.json.")
+        for job in self.data["mail_jobs"].values():
+            deadline = job.get("window_due", job["due"])
+            generation = job.get("round_generation", 0)
+            if not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or not isinstance(generation, int) or generation < 0:
+                raise ValueError("Invalid email window: original state preserved.")
 
     def save(self) -> None:
         with self.lock:

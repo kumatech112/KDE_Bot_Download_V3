@@ -1,4 +1,17 @@
-# KDE Bot Download V3 — 3.2.4
+# KDE Bot Download V3 — 3.3.0
+
+- Replace the two-minute delay with a fixed 60-second window shared by arriving mail; preserve deadlines across restarts and prevent accumulated delays.
+- Search both enabled account catalogues before selecting a requested file, retaining company, file-side, date, number and global ambiguity guards. Save identical equivalent files only once.
+- Keep two attempts total per request per round. Retry missing/download failures in fresh sessions, then defer until genuinely new relevant mail starts another round, including mail arriving during the final attempt.
+- Separate unlimited busy-account availability checks from the attempt budget. Probe only busy accounts every 60 seconds; close available sessions while waiting, then refresh both catalogues when available.
+- Remove account-wide sign-out/reset calls from V3. Clean up only successfully acquired browser sessions. Pause rejected credentials or ambiguous references for review.
+- Preserve pending work across midnight with original business dates. Retain processed-message IDs, review, copy repair, flat final filenames, no-overwrite delivery and existing credentials/storage boundaries.
+- Show Waiting for new email and Account busy in Monitor. Retain the English interface, icon, Show password, Stop and clean portable layout.
+- Add cross-source, timing, restart, busy, credential, concurrency and cancellation regressions; exercise real offline browser downloads and final-file delivery through the packaged joint runner.
+
+Short commit message: feat: add joint KDE search and mail-triggered retry rounds
+
+## 3.2.4
 
 - Integrate the reviewed supplied paging patch: read table rows in one browser call and deliver while returning from the last portal page to the earliest selected page.
 - Require stable changed file rows instead of networkidle and a fixed 1.5-second pause; ignore loading/busy states and fail explicitly when navigation does not complete.

@@ -20,8 +20,9 @@ from .settings import validate_settings, settings_home
 from .storage import Delivery, History, Reporter, WorkerLock, check_destination, check_writable
 from .mail_queue import MailQueue, account_side
 from .evidence import MailEvidenceReader, today
-from .instructions import instruction_match
+from .instructions import instruction_match, own_company_compatible
 from .matching import ocr_match, row_matches_job_date
+from .search_round import AccountBusyError, CredentialsError, run_search_round
 
 
 STEPS = {
@@ -70,6 +71,11 @@ class StructuredDownloader(core.KdeDownloader):
         self.mail_failures: list[str] = []
         self.reported_mail_fallbacks: set[str] = set()
         self.session_attempted = False
+        self.session_owned = False
+        self.busy_detected = False
+        self.probe_only = False
+        self.coordinator = None
+        self.source_username = ""
         self.file_handler = self.handle_file
         self.login_attempts = 1
         self.mail_messages: list[dict[str, Any]] = []
@@ -99,10 +105,19 @@ class StructuredDownloader(core.KdeDownloader):
             account = next((account for account in self.configuration["accounts"] if account["username"] == job["account"]), None)
             side = account_side(account, self.configuration["accounts"].index(account)) if account else None
             candidates = [(index, row) for index, row in rows
-                          if core.account_side_from_name(row.get("filename", "")) in {None, side}
+                          if (job.get("search_any_side") or core.account_side_from_name(row.get("filename", "")) in {None, side})
+                          and own_company_compatible(row.get("filename", ""))
                           and row_matches_job_date(row.get("filename", ""), row.get("file_time", ""), job)]
             precise = {key: original for key, original in job["lookup"].items()
                        if core.has_known_file_extension(key) or core.is_kde_reference_candidate(key)}
+            if job.get("search_any_side"):
+                matching = [row for _index, row in candidates
+                            if self._mail_match_detail(core.normalize_filename_for_match(row["filename"]), precise or job["lookup"])]
+                matching_sides = {core.account_side_from_name(row["filename"]) for row in matching}
+                matching_sides.discard(None)
+                if len(matching_sides) > 1:
+                    ambiguous.update({key: len(matching) for key in job["lookup"]})
+                    continue
             matches, conflicts = super()._select_page_mail_matches(candidates, precise or job["lookup"])
             ambiguous.update(conflicts)
             for row_index, detail in matches.items():
@@ -190,6 +205,8 @@ class StructuredDownloader(core.KdeDownloader):
         return rows
 
     def _download_visible_pages(self, page, account, timeout_ms, allowed_filenames=None):
+        if self.probe_only:
+            return {"downloaded": 0, "skipped": 0, "not_requested": 0, "errors": 0}
         if not self.jobs:
             return super()._download_visible_pages(page, account, timeout_ms, allowed_filenames)
         result = {"downloaded": 0, "skipped": 0, "not_requested": 0, "errors": 0}
@@ -213,7 +230,10 @@ class StructuredDownloader(core.KdeDownloader):
                 if self.stop_event.is_set():
                     return result
                 raise RuntimeError("Portal pagination changed during matching; no files downloaded.")
-        selected, ambiguous = self._select_page_mail_matches(catalogue, allowed_filenames or {})
+        if self.coordinator is not None:
+            selected, ambiguous, self.row_jobs = self.coordinator.select(self.source_username, self, catalogue)
+        else:
+            selected, ambiguous = self._select_page_mail_matches(catalogue, allowed_filenames or {})
         matched_jobs = {identifier: set(self.row_jobs.get(identifier, set())) for identifier in selected}
         for key, count in ambiguous.items():
             self.reporter.emit(4, "warning", f"Reference matches {count} different files across the portal; review required: {key}",
@@ -301,6 +321,8 @@ class StructuredDownloader(core.KdeDownloader):
             if any(text in lower for text in ("error", "ไม่สำเร็จ", "ยังอยู่ที่")):
                 self.logout_failures.append(message)
         if "login attempt" in lower or "user ยังใช้งานอยู่" in lower:
+            if "user ยังใช้งานอยู่" in lower:
+                self.busy_detected = True
             self.reporter.emit(3, "running", "KDE user is already in use." if "user ยังใช้งานอยู่" in lower else message, self.account)
         if "mail key ที่กำกวม" in message:
             self.reporter.emit(4, "warning", "Several KDE files match this reference; no ambiguous file was downloaded.", self.account, persist=True)
@@ -309,13 +331,46 @@ class StructuredDownloader(core.KdeDownloader):
         self.stage = 3
         self.session_attempted = True
         self.reporter.emit(3, "running", "Logging in to KDE", account.label)
-        super()._login_with_retry(page, account, timeout_ms)
+        self.busy_detected = False
+        try:
+            super()._login_with_retry(page, account, timeout_ms)
+        except Exception as error:
+            if self.busy_detected:
+                raise AccountBusyError(f"{account.label} is already in use; wait without forcing sign-out.") from error
+            text = str(error).casefold()
+            if any(phrase in text for phrase in ("invalid password", "incorrect password", "invalid credentials",
+                                                 "account locked", "password is incorrect", "รหัสผ่านไม่ถูกต้อง",
+                                                 "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", "บัญชีถูกล็อก")):
+                raise CredentialsError(f"{account.label}: credentials rejected or account locked. Stop, update Settings, then restart.") from error
+            raise
+        self.session_owned = True
         self.reporter.emit(3, "stage_complete", "Login succeeded", account.label)
 
     def _open_download_page(self, page: Any, timeout_ms: int) -> None:
+        if self.probe_only:
+            return
         self.stage = 4
         self.reporter.emit(4, "running", "Matching portal files against email evidence", self.account)
         super()._open_download_page(page, timeout_ms)
+
+    def auto_signout(self, account: core.Account) -> None:
+        """Never reset an account by username; it may belong to another user."""
+        return None
+
+    def signout(self, account: core.Account, referer=None) -> None:
+        """Own browser cleanup is handled by _logout_browser_session."""
+        return None
+
+    def _logout_browser_session(self, page, account, timeout_ms) -> None:
+        if not self.session_owned:
+            return
+        self._ui_logout(page, timeout_ms)
+        if "/login" not in page.url:
+            # This request uses only this browser's authenticated cookies.
+            self._browser_auth_post(page, "/signOut", {}, account.label)
+            if not self._wait_for_logout_navigation(page, min(timeout_ms, 5000)):
+                self.logout_failures.append("Own browser logout could not be confirmed; no account-wide reset was sent.")
+        self.session_owned = False
 
     def _post_auth(self, path: str, payload=None, referer=None):
         response = super()._post_auth(path, payload, referer)
@@ -370,6 +425,7 @@ class StructuredDownloader(core.KdeDownloader):
         self.stage = 3
         self.logout_failures = []
         self.session_attempted = False
+        self.session_owned = False
         self.reporter.emit(3, "running", "Preparing an isolated account session", self.account)
         try:
             result = super().process_account(account)
@@ -496,24 +552,45 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
 
 def run_account_batch(settings: dict[str, Any], jobs: list[dict[str, Any]],
                       stop_event: threading.Event, reporter: Reporter,
-                      history: History, temporary: Path) -> dict[str, dict[str, str]]:
+                      history: History, temporary: Path, source_username=None, coordinator=None) -> dict[str, Any]:
     # Every worker owns its Playwright runtime, browser and isolated cookies.
-    engine_settings = make_engine_settings(settings, temporary / f"engine-{jobs[0]['id']}.json")
+    source_username = source_username or jobs[0]["account"]
+    index = next(index for index, account in enumerate(settings["accounts"]) if account["username"] == source_username)
+    engine_settings = make_engine_settings(settings, temporary / f"engine-{jobs[0]['id']}-{index}.json")
     engine = StructuredDownloader(engine_settings, reporter, Delivery(history, reporter), settings, stop_event)
     engine.jobs = jobs
+    engine.coordinator = coordinator
+    engine.source_username = source_username
+    if coordinator is not None:
+        with coordinator.condition:
+            coordinator.engines[source_username] = engine
     engine.mail_filename_lookup = {key: original for job in jobs for key, original in job["lookup"].items()}
-    account = next(account for account in engine_settings.accounts if account.username == jobs[0]["account"])
+    account = next(account for account in engine_settings.accounts if account.username == source_username)
     reporter.emit(3, "running", f"Opening an isolated session; attempt {max(job['attempts'] for job in jobs)}/2", account.label)
     try:
         engine.process_account(account)
         if engine.logout_failures:
             raise RuntimeError("Logout failed: " + " | ".join(engine.logout_failures))
+        if coordinator is not None:
+            return {"statuses": copy.deepcopy(engine.job_statuses), "required": copy.deepcopy(engine.required_matches)}
         return engine.job_outcomes()
     except Exception as error:
-        kind = "login_failed" if engine.stage == 3 or engine.logout_failures else "download_failed"
+        kind = ("account_busy" if isinstance(error, AccountBusyError) else "credentials" if isinstance(error, CredentialsError)
+                else "login_failed" if engine.stage == 3 or engine.logout_failures else "download_failed")
         reason = f"{STEPS[engine.stage]}: {type(error).__name__}: {error}"
-        reporter.emit(engine.stage, "error", reason, account.label, persist=True, count=True)
+        for configured in settings["accounts"]:
+            if configured["password"]:
+                reason = reason.replace(configured["password"], "[REDACTED]")
+        if coordinator is not None:
+            coordinator.fail(source_username, {"kind": kind, "reason": reason})
+        reporter.emit(engine.stage, "waiting" if kind == "account_busy" else "error", reason, account.label,
+                      persist=True, count=kind != "account_busy")
         return {job["id"]: {"kind": kind, "reason": reason} for job in jobs}
+    finally:
+        if coordinator is not None:
+            with coordinator.condition:
+                if source_username not in coordinator.catalogues and source_username not in coordinator.failures:
+                    coordinator.fail(source_username, {"kind": "download_failed", "reason": "Source search stopped before its catalogue was ready."})
 
 
 def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
@@ -523,6 +600,10 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
     mail_queue.recover_interrupted(time.time())
     scanner = StructuredDownloader(make_engine_settings(settings, temporary / "mail-scan.json"),
                                    reporter, Delivery(history, reporter), settings, stop_event)
+    with history.lock:
+        # Starting the monitor is an explicit opportunity to retry corrected credentials.
+        history.data["blocked_search_accounts"] = {}
+        history.save()
     active: dict[str, Any] = {}
     next_scan = 0.0
     scanned_once = False
@@ -571,12 +652,16 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
                         break
                 scanned_once = True
                 next_scan = time.time() + settings["mail_poll_seconds"]
-            for account, jobs in mail_queue.claim_ready(time.time(), set(active)).items():
-                if stop_event.is_set():
-                    mail_queue.finish({job["id"]: {"kind": "missing", "reason": "Stopped before opening a session"} for job in jobs}, time.time(), True)
-                    continue
-                active[account] = executor.submit(run_account_batch, settings, jobs, stop_event,
-                                                  reporter, history, temporary)
+            if not active:
+                batches = mail_queue.claim_ready(time.time(), set())
+                jobs = sorted([job for batch in batches.values() for job in batch], key=lambda job: job.get("sequence", 0))
+                if jobs:
+                    if stop_event.is_set():
+                        mail_queue.finish({job["id"]: {"kind": "missing", "reason": "Stopped before opening a session"}
+                                           for job in jobs}, time.time(), True)
+                    else:
+                        active["both"] = executor.submit(run_search_round, settings, jobs, stop_event,
+                                                         reporter, history, temporary)
             snapshot = mail_queue.snapshot()
             signature = repr(snapshot)
             if signature != last_snapshot and requests is not None:
@@ -585,7 +670,7 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
             with history.lock:
                 enabled = {account["username"] for account in settings["accounts"] if account["enabled"]}
                 waiting = sum(job["status"] == "waiting" and job["account"] in enabled for job in mail_queue.jobs.values())
-            summary = f"Monitoring today's mail · Queued {waiting} · Active accounts {len(active)}/2"
+            summary = f"Monitoring today's mail · Queued {waiting} · Search round {'active' if active else 'idle'} · Pre + Post"
             if summary != last_summary:
                 reporter.emit(2, "summary", summary)
                 last_summary = summary
