@@ -251,6 +251,7 @@ def check_round_timing(root: Path) -> None:
     """Verify durable round deadlines and a busy wait without portal access."""
     from .mail_queue import MailQueue
     settings = default_settings()
+    settings["mail_delay_seconds"] = 60  # Historical matcher fixture; not the production daily queue.
     settings["accounts"][0]["username"] = "offline-timing-pre"
     settings["accounts"][1]["username"] = "offline-timing-post"
     logs = root / "round-timing"
@@ -470,8 +471,161 @@ def check_outlook_folder_filter(root: Path) -> None:
     assert unread.UnRead is True and read.UnRead is False
 
 
+def check_arrival_metadata(root: Path) -> None:
+    from . import legacy_core as core
+    from .daily_download import scan_arrivals
+    from .evidence import BANGKOK
+
+    class Collection:
+        def __init__(self, values=()):
+            self.values = list(values)
+        @property
+        def Count(self):
+            return len(self.values)
+        def Item(self, index):
+            return self.values[index - 1]
+        def Sort(self, *_args):
+            pass
+
+    class Metadata:
+        Class = 43
+        EntryID = "offline-no-content-mail"
+        ReceivedTime = datetime.now(BANGKOK)
+        def __getattr__(self, name):
+            raise AssertionError("Mail content was accessed: " + name)
+
+    def folder(name, values=(), children=(), kind=0):
+        return SimpleNamespace(Name=name, StoreID="offline-data-store", DefaultItemType=kind,
+                               Items=Collection(values), Folders=Collection(children))
+
+    settings = default_settings()
+    child = folder("data", [Metadata()])
+    inbox = folder("Inbox", [Metadata()], [child])
+    root_folder = folder(settings["mail_watch"]["mailbox_filter"], children=[inbox, folder("Sent Items", [Metadata()]), folder("Notes", [Metadata()], kind=5)])
+    namespace = SimpleNamespace(Folders=Collection([root_folder, folder("unrelated mailbox", [Metadata()])]))
+    with patch.object(core, "win32_client", SimpleNamespace(Dispatch=lambda _name: SimpleNamespace(GetNamespace=lambda _name: namespace))), \
+            patch.object(core, "pythoncom", SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)):
+        assert len(scan_arrivals(settings, threading.Event())) == 2
+        settings["mail_watch"]["folder_path"] = "Inbox\\data"
+        found = scan_arrivals(settings, threading.Event())
+        assert len(found) == 1 and found[0]["entry_id"] == Metadata.EntryID
+
+
+def check_daily_queue(root: Path) -> None:
+    from .daily_download import DailyQueue
+    from .evidence import today
+    settings = default_settings()
+    for index, account in enumerate(settings["accounts"]):
+        account["username"] = f"offline-daily-{index}"
+    logs = root / "daily-queue"
+    logs.mkdir()
+    history = History(logs)
+    pending = DailyQueue(history, settings)
+    mail = {"entry_id": "first", "store_id": "offline", "received": today() + "T08:00:00"}
+    assert pending.ingest([mail], 100) == 1
+    assert pending.ingest([{**mail, "entry_id": "second"}], 130) == 1
+    assert pending.state["pending_due"] == 170 and pending.claim(169) == []
+    restarted = DailyQueue(History(logs), settings)
+    restarted.recover(150)
+    assert restarted.ingest([mail], 160) == 0
+    jobs = restarted.claim(170)
+    assert len(jobs) == 2 and all(job["attempts"] == 1 for job in jobs)
+    restarted.ingest([{**mail, "entry_id": "during-download"}], 180)
+    restarted.ingest([{**mail, "entry_id": "later"}], 190)
+    assert restarted.state["pending_due"] == 250
+    restarted.finish("offline-daily-0", {"kind": "complete", "reason": "offline saved"}, 200)
+    restarted.finish("offline-daily-1", {"kind": "account_busy", "reason": "offline busy"}, 200)
+    assert restarted.claim(259) == []
+    retry = restarted.claim(260)
+    assert len(retry) == 1 and retry[0]["account"] == "offline-daily-1" and retry[0]["attempts"] == 2
+    restarted.finish("offline-daily-1", {"kind": "account_busy", "reason": "offline still busy"}, 261)
+    # The newer arrival's deadline elapsed while the bounded retry was active.
+    assert len(restarted.claim(261)) == 2
+    for account in settings["accounts"]:
+        restarted.finish(account["username"], {"kind": "empty", "reason": "offline missing"}, 262)
+    retry = restarted.claim(322)
+    assert len(retry) == 2
+    for account in settings["accounts"]:
+        restarted.finish(account["username"], {"kind": "empty", "reason": "offline missing"}, 323)
+    assert restarted.claim(10000) == []
+
+
+def check_daily_native_round(root: Path) -> None:
+    from datetime import timedelta
+    from .daily_download import DailyDownloader, run_daily_account
+    from .evidence import BANGKOK, today
+    from .workflow import StructuredDownloader
+    settings = default_settings()
+    settings["download_delay_seconds"] = 0
+    for index, account in enumerate(settings["accounts"]):
+        account.update(username=f"offline-native-{index}", password="offline-only")
+    for key in ("original_dir", "new_dir", "log_dir"):
+        folder = root / ("native-" + key)
+        folder.mkdir()
+        settings[key] = str(folder)
+    (Path(settings["original_dir"]) / "already-original.zip").write_bytes(b"original existing")
+    (Path(settings["new_dir"]) / "already-new.zip").write_bytes(b"new existing")
+    history = History(Path(settings["log_dir"]))
+    reporter = Reporter(history, lambda _event: None)
+    visited = []
+    downloaded = []
+    current = datetime.now(BANGKOK)
+    date_text = current.strftime("%d/%m/%Y")
+    old_date = (current - timedelta(days=1)).strftime("%d/%m/%Y")
+    catalogues = {
+        "offline-native-0": [("pre-only.csv", date_text), ("report.xlsx.gpg", date_text), ("report.zip.gpg", date_text),
+                             ("shared.zip", date_text), ("already-original.zip", date_text), ("yesterday.zip", old_date)],
+        "offline-native-1": [("post-only.bin", date_text), ("shared.zip", date_text), ("already-new.zip", date_text), ("unknown-date.zip", "Unknown")],
+    }
+    def local_login(engine, _page, account, _timeout):
+        engine.session_attempted = True
+        engine.session_owned = True
+        visited.append(account.username)
+    def local_page(engine, page, _timeout):
+        engine.stage = 4
+        username = next(account.username for account in engine.settings.accounts if account.label == engine.account)
+        rows = catalogues[username]
+        page.set_content("""<table><tbody></tbody></table><script>const rows=""" + json.dumps(rows) + """;
+            document.querySelector('tbody').innerHTML=rows.map((row,index)=>
+            '<tr><td>'+(index+1)+'</td><td>'+row[0]+'</td><td>'+row[1]+'</td><td>1 KB</td><td><button>Download</button></td></tr>').join('');
+            document.querySelectorAll('button').forEach((button,index)=>button.onclick=()=>{
+                const link=document.createElement('a');link.href=URL.createObjectURL(new Blob(['payload '+rows[index][0]],{type:'application/octet-stream'}));
+                link.download=rows[index][0];link.click();});</script>""")
+    def local_logout(engine, _page, _account, _timeout):
+        engine.session_owned = False
+    original_download = DailyDownloader.download_to_cache
+    def native_download(engine, page, index, timeout):
+        downloaded.append(page.locator("tbody tr").nth(index).locator("td").nth(1).inner_text())
+        return original_download(engine, page, index, timeout)
+    with patch.object(StructuredDownloader, "_login_with_retry", local_login), \
+            patch.object(StructuredDownloader, "_open_download_page", local_page), \
+            patch.object(StructuredDownloader, "_logout_browser_session", local_logout), \
+            patch.object(StructuredDownloader, "_post_auth", side_effect=AssertionError("Account-wide reset")), \
+            patch.object(DailyDownloader, "download_to_cache", native_download), \
+            patch("kde_bot.workflow.MailEvidenceReader", side_effect=AssertionError("Content matching or OCR was used")):
+        for sequence in (1, 2):
+            jobs = [{"account": account["username"], "label": account["label"], "work_date": today(), "sequence": sequence} for account in settings["accounts"]]
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = list(pool.map(lambda job: run_daily_account(settings, job, threading.Event(), reporter, history, root), jobs))
+            assert all(outcome["kind"] == "complete" for outcome in outcomes), outcomes
+            assert sorted(downloaded) == ["post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip"]
+    assert len(visited) == 4
+    expected = {"post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip"}
+    assert len(history.data["files"]) == 5
+    from .activity import read_activity
+    activity, _latest = read_activity(Path(settings["log_dir"]), exact_names=True)
+    completed = {event["filename"] for event in activity if event["status"] == "complete"}
+    assert completed == expected  # Same-stem extensions retain separate successful history events.
+    for key, existing in (("original_dir", "already-original.zip"), ("new_dir", "already-new.zip")):
+        folder = Path(settings[key])
+        assert {path.name for path in folder.iterdir()} == expected | {existing}
+        for name in expected:
+            assert (folder / name).read_text() == "payload " + name
+
+
 def run_self_check(output: Path) -> int:
-    result = {"checks": [], "live_portal_access": False, "business_files_modified": False}
+    result = {"checks": [], "live_portal_access": False, "business_files_modified": False,
+              "download_policy": "daily_all", "ocr_enabled": False}
     try:
         with tempfile.TemporaryDirectory(prefix="kde-v3-exe-check-") as temporary:
             root = Path(temporary)
@@ -554,44 +708,18 @@ def run_self_check(output: Path) -> int:
                 assert list(pool.map(browser_worker, range(2))) == [0, 1]
             assert asyncio.create_subprocess_exec is original_subprocess_factory
             result["checks"].append("Two concurrent packaged browser processes with isolated account cookies; offline")
-            from .mail_queue import MailQueue
-            with WorkerLock(logs):
-                history = History(logs)
-                reporter = Reporter(history, lambda _event: None)
-                settings["accounts"][0]["username"] = "offline-user"
-                mail_queue = MailQueue(history, reporter, settings)
-                message = {"entry_id": "offline-message", "store_id": "offline-store", "subject": "Pre",
-                           "lookup": {"payment online 67097": "payment online 67097"}}
-                assert mail_queue.claim_ready(0, set()) == {}
-                mail_queue.ingest([message], 1000)
-                assert mail_queue.claim_ready(1059, set()) == {}
-                batch = mail_queue.claim_ready(1060, set())["offline-user"]
-                job_id = batch[0]["id"]
-                mail_queue.finish({job_id: {"kind": "login_failed", "reason": "offline failure"}}, 1061)
-                assert mail_queue.claim_ready(1120, set()) == {}
-                assert mail_queue.claim_ready(1121, set())["offline-user"][0]["attempts"] == 2
-                mail_queue.finish({job_id: {"kind": "missing", "reason": "offline missing file"}}, 1122)
-                assert mail_queue.claim_ready(9999, set()) == {}
-                assert mail_queue.jobs[job_id]["status"] == "deferred"
-            result["checks"].append("Packaged durable mail queue: fixed 60-second window; two attempts per round; then defer until a new relevant email")
-            check_outlook_folder_filter(root)
-            result["checks"].append("Packaged Outlook scanner: skip Notes, scan mail children, recover rejected UnRead filter, ignore read/non-mail items; fake COM only")
+            check_arrival_metadata(root)
+            result["checks"].append("Incoming data mailbox IDs only; read mail included; no subject/body/images read; optional folder and outgoing/Notes exclusions; fake COM only")
+            check_daily_queue(root)
+            result["checks"].append("70-second fixed arrival window, seen-ID restart persistence, queued arrivals during active work, one bounded busy retry and no idle portal loop")
             check_flat_storage(root)
             result["checks"].append("Two concurrent accounts store verified files directly in shared destination roots; legacy account subfolders ignored in all three modes")
             check_destination_preflight(root)
             result["checks"].append("Destination preflight creates no probe files and succeeds with business-folder writes denied; existing files preserved; Log probe retained")
-            check_agent_features(root)
-            result["checks"].append("Actual bundled English/Thai OCR reads a sample screenshot; FIFO, one-minute window and final-filename-only publication passed offline")
-            check_portal_catalogue(root)
-            result["checks"].append("Actual offline browser: previous/next pagination, cross-page ambiguity rejection and precise-reference precedence before any click")
             check_portal_paging(root)
             result["checks"].append("Actual offline browser: delayed tables with background polling, shorter reverse delivery, fresh row indexes, stalled navigation refusal and Stop cancellation")
-            check_joint_search_round(root)
-            result["checks"].append("Actual two-source round: Pre request found only in Post; both native catalogues checked; one browser download published to both flat roots with linked mail history; no account-wide reset")
-            check_round_timing(root)
-            result["checks"].append("Fixed coalesced mail deadline; new mail during final retry starts the next round at its existing deadline; restart preserves timing; busy waits do not consume attempts")
-            check_body_instructions(root)
-            result["checks"].append("Body instructions: 1015 fallback, generic account templates, unknown-date placeholders, legal-type numbers and monthly filenames; foreign company and company-only references rejected")
+            check_daily_native_round(root)
+            result["checks"].append("Real two-browser daily sweep: arbitrary names, today-only date guard, one download per shared filename, either-root skips without copying, both final roots, no OCR/content matching or account-wide reset; second sweep makes no downloads")
         result["status"] = "passed"
         exit_code = 0
     except Exception as error:

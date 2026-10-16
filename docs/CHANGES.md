@@ -1,4 +1,19 @@
-# KDE Bot Download V3 — 3.3.0
+# KDE Bot Download V3 — 3.4.0
+
+- Replace production keyword/OCR selection with a metadata-only arrival trigger for the configured data mailbox and incoming folders.
+- Wait a fixed 70 seconds; coalesce arrivals without extending the pending deadline. Continue detecting arrivals while a round runs, queueing another round.
+- Download all today's KDE files from both enabled accounts, using the portal date column, without company/business-side/word filtering. Skip unknown dates and expire previous-day pending work.
+- Check exact Windows filenames in both shared roots immediately before each download. If present in either, skip without downloading or filling the other destination.
+- Keep different extensions as separate files, delivery records and success-history events. Coordinate duplicate filenames across workers; retain no-overwrite verified final-file publication.
+- Bound failed, empty and busy accounts to the first attempt plus one retry after 60 seconds. Do not reopen a successful source for the other's retry. No unlimited busy probes or forced account resets.
+- Preserve mail IDs, attempts and absolute deadlines across restarts. Pause rejected credentials during a monitor run. Normal rounds do not automatically repair missing copies when either root already has the file; explicit Repair pending saves remains available without browser access.
+- Replace Import image / reference review with Round details and Request download round. Retain Show password, Stop, supplied icon, three tabs and compact monthly history.
+- Remove the OCR runtime/build dependency from the portable. Retain historical helper code/fixtures as regression references; production no longer executes old matching queues.
+- Add daily policy, real monitor scheduling, midnight, either-root skip, distinct-extension history, exact cached repair, credential and corruption checks. Verify the real packaged browser/download/delivery path against isolated local HTML.
+
+Short commit message: feat: download all current-day KDE files on mail arrival
+
+## 3.3.0
 
 - Replace the two-minute delay with a fixed 60-second window shared by arriving mail; preserve deadlines across restarts and prevent accumulated delays.
 - Search both enabled account catalogues before selecting a requested file, retaining company, file-side, date, number and global ambiguity guards. Save identical equivalent files only once.

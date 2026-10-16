@@ -1,42 +1,41 @@
-# Verification — 2026-10-16 — 3.3.0
+# Verification — 2026-10-16 — 3.4.0
 
-## Current workflow verification
+## Daily mode source checks
 
-- Source compilation and **177 tests plus 4 subtests passed**. The full regression suite covers cross-account selection, equivalent duplicate files, cross-source ambiguity, unknown business sides, company/date/number guards, FIFO, deferred rounds and two total attempts per round.
-- Timing checks cover one shared 60-second window, later mail joining without resetting it, new mail arriving during the final attempt, restart with an existing future deadline, midnight retention and migration from legacy five-minute waits without resetting consumed attempts.
-- Busy checks are separate from the attempt budget. Tests repeat busy outcomes beyond two checks, verify only busy sources are probed, resume fresh full catalogues when available and pause rejected credentials. Stop and setup failures release waiting source workers. Account-wide sign-out/reset methods are disabled in V3.
-- All **15 source offline checks passed**, exercising the real OCR engine, two native browser processes, complete paginated catalogues, delayed/loading/busy/stalled tables, shorter reverse delivery, fresh row indexes, cancellation, durable queue state and final-file publication.
-- The new complete joint-round check opens both real browser workers against local HTML. A Pre request is found only in Post, downloaded once through the native download event, published into both temporary flat destinations and linked to its mail job in history. Only login, page content and session cleanup are replaced by local fixtures.
-- The source GUI check reports 3.3.0, six representative queue states, visible deferred/busy labels, 60-second policy, two attempts, read-mail scanning, automatic-start trigger, Show password, Stop and the supplied window/header icon.
+- Source compilation and **205 tests plus 4 subtests passed** with the daily workflow, retaining the existing legacy-helper tests as regression/reference fixtures. Production entrypoint tests explicitly reject any call to the old email matcher or evidence/OCR reader.
+- New checks cover the fixed 70-second window, ID deduplication and restart, arrivals during active work, midnight expiration and a midnight-crossing download, one busy retry, independent successful sources, credential pause and corrupted-state preservation.
+- Exact filenames are checked in either root in all three save modes. Different extensions download separately and retain distinct complete events. Two workers download a duplicate filename once. Existing files cause neither another download nor a copy to the other root; skips incur no between-download delay.
+- Explicit Repair pending saves reuses the exact daily ledger and retained source without opening a browser. Legacy delivery behavior remains covered by the original tests.
+- All **11 source offline checks passed**. The metadata check uses fake COM objects that raise if Subject, Body, Attachments or other contents are accessed. It verifies incoming data mailbox scope, read mail, optional nested folder, and outgoing/Notes exclusions.
+- The native daily check runs both real browser workers against local HTML for two rounds: five arbitrary/extension-distinct files download once each, shared names download once, existing files remain in just their original root, yesterday/unknown dates are excluded, both selected roots receive final files and the second sweep performs no downloads. Success history is replayed with exact keys.
+- Preserved native pagination checks exercise delayed/loading/busy/stalled tables, reverse traversal, shifted row indexes and Stop. Shared-root delivery, read-only business preflight, DPAPI and the worker lock remain exercised.
+- The source GUI uses six representative states and reports daily_all, 70-second delay, two total attempts including busy accounts, no OCR/content matching, either-root skip, Show password, Stop, the supplied icon and no theme selector.
 
-## Preserved boundaries
+## Storage and scope
 
-- Delivery remains flat and no-overwrite. No destination probes, account folders, log files or temporary sidecars are created in business destinations. Checks use isolated temporary folders and generated data.
-- Existing Windows CREATE_NEW publication, reader exclusion during copying, hash verification, duplicate verification, cached-source repair, DPAPI, exclusive Log lock, compact state/monthly CSV, redaction, history search and body/OCR matching remain covered.
-- The supplied multi-size icon remains unchanged: SHA-256 `8ad034733f09aeaca0ca829db1845eb738550f8b6717b574009b9d251060a587`.
-- PowerShell provider-qualified diagnostic path conversion remains covered by the regression suite; actual packaged arguments are checked before promotion.
-- Shared state remains schema 3 with validated additive fields. Old exhausted requests migrate to deferred. Pending work retains its original date and survives midnight. Invalid/ambiguous requests require explicit review; a review or pending-save head holds its business-side queue.
-- No unrelated application, Windows/SMB permission, credential format or business destination is changed. An existing incomplete final file is preserved and requires attention rather than automatic overwrite.
+No production mailbox, live KDE account, credential or business file is used for verification. All file fixtures use isolated temporary roots. No Windows/SMB permissions or unrelated applications change. The log layout remains one schema-3 state file, monthly CSV and lock; daily_watch and exact-name records are additive. Existing historical queues are retained but not executed by production daily mode.
+
+The business destinations receive no probes, temporary sidecars, new folders or logs. New downloads use exclusive final-file creation and hash-verified publication. Already-present nonempty filenames are skipped without checking their contents, per the requested rule. Zero-byte files/conflicts remain visible failures and are never overwritten. Explicit save repair is separate from automatic either-root skipping.
+
+The supplied icon is unchanged: SHA-256 `8ad034733f09aeaca0ca829db1845eb738550f8b6717b574009b9d251060a587`.
 
 ## Portable release
 
-- The actual packaged 3.3.0 EXE passed all **15 offline checks**, including two-source native downloads, dual-destination final publication, OCR, paging, durable timing and busy-budget behavior.
-- The actual packaged GUI passed and its Monitor/Settings screenshots were visually checked: six representative states, fully visible deferred/busy labels, 60-second mail/login policy, two attempts, password controls, Stop, icon and clean three-tab layout.
-- Both packaged diagnostic commands were launched using PowerShell FileSystem-provider-qualified UNC output paths. Both exited successfully and wrote the expected real reports. Self-check and GUI reports are linked to the tested EXE by SHA-256 and record powershell_path_input_verified=true.
-- The staged bundle contains only the EXE, _internal and Quick start.md at its top level, with bundled browser and English/Thai OCR.
+- The actual packaged 3.4.0 EXE passed all **11 offline checks**, including the metadata-only scanner, durable 70-second trigger, bounded retry, exact-name two-browser download and both-root publication/skip rules.
+- The actual packaged GUI passed and Monitor/Settings screenshots were visually checked. The report confirms daily_all, mail_delay_seconds=70, busy_attempts_total=2, skip_either_destination=true, email_content_matching=false and ocr_enabled=false. Show password, Stop, auto-start, history search/details and supplied icons passed.
+- Packaged self-check and GUI were both launched with PowerShell provider-qualified UNC output paths. Successful exit codes, real report placement and powershell_path_input_verified=true are recorded; both reports carry the tested EXE hash.
+- The staged distribution has only EXE, _internal and Quick start.md at its top level. The pinned browser is present; _internal/ocr is absent and bundled_ocr=false. No local settings, credentials, logs or business files are bundled.
 
-Verified EXE SHA-256: `9d6d0dba4794958fcb5224cf78e6a570eeb6ff1c6e99021dd0bb2446d267eae2`.
+Verified EXE SHA-256: `6a6781905692f0bf1f1d6ff455534aa95fd05a58226b84fe8692ea7855f58e51`.
 
 Verified release folder: `portable`.
 
-The verified 3.3.0 bundle replaced 3.2.4 at `portable`. Final EXE hash, bundled icon, three-item layout and removal of the old/staged bundle were checked after promotion. Only one portable folder remains. Local settings, cached downloads, shared logs/state and business files were preserved.
+The tested 3.4.0 bundle replaced 3.3.0 in the normal portable folder. Final EXE hash, supplied icon, guide/source equality, three-item layout, OCR absence and old/staged-bundle removal were verified after promotion. Only one portable folder remains. User settings, cached sources, shared logs/state and production business files were preserved.
 
 ## Deployment boundary
 
-Checks execute on **10.0.0.73**, accessing the project on **10.0.0.97**. They do not prove the Windows user's Outlook profile, share access or live KDE login/catalogue/download/logout on .97.
+Verification executes on **10.0.0.73** against the project stored on **10.0.0.97**. It does not verify .97's Windows user, Outlook profile, network permissions or live KDE login/list/download/logout behavior. The two-browser fixture uses local HTML and Blob downloads; login/page content/logout are local fixture replacements.
 
-No real mailbox, production credential, business screenshot or live KDE service is used during verification. OCR uses generated representative images; exact extraction from every real image is not guaranteed. External image URLs are not fetched automatically.
+The configured data mailbox and incoming folders are the confirmed scope. Mail is polled every 15 seconds by default; 70 seconds starts at discovery. Pending work, login operations and occupied users can delay processing. A failed/empty/busy account retries once after 60 seconds, then waits for another mail/manual trigger. No idle availability loop or forced sign-out remains.
 
-The app polls local classic Outlook every 15 seconds by default. The one-minute deadline starts at discovery, not the mail server's receipt timestamp; queued work or an occupied account can delay actual processing. Busy probes run every 60 seconds plus operation time, not continuously. Full two-source matching waits for both enabled sources and never forces another user out. A successful availability probe is cleaned up before a fresh joint search, so live server logout behavior still needs deployment validation.
-
-Known username/password rejection or account-lock messages pause for review. Unknown login errors use the bounded retry policy. Representative live portal messages and selectors should be checked on .97; no live performance benchmark is claimed.
+Portal date text is authoritative; blank dates may use a unique filename date. Unsupported/unreadable dates are excluded and counted. Representative live portal dates/selectors still need deployment validation. A full catalogue exceeding the configured page limit fails visibly; no live completeness or speed benchmark is claimed.

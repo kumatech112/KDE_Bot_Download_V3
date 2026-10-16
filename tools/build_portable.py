@@ -18,32 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 NAME = "KDE Bot Download V3"
 
 
-def bundle_ocr(distribution: Path) -> None:
-    source = Path(os.environ.get("KDE_OCR_HOME", r"C:\Program Files\Tesseract-OCR"))
-    destination = distribution / "_internal" / "ocr"
-    required = [source / "tesseract.exe", source / "tessdata/eng.traineddata",
-                source / "tessdata/tha.traineddata", source / "tessdata/configs/tsv", source / "doc/LICENSE"]
-    for path in required:
-        if not path.is_file():
-            raise FileNotFoundError(f"Missing OCR build dependency: {path}")
-    destination.mkdir(parents=True)
-    shutil.copy2(source / "tesseract.exe", destination / "tesseract.exe")
-    for library in source.glob("*.dll"):
-        shutil.copy2(library, destination / library.name)
-    (destination / "tessdata/configs").mkdir(parents=True)
-    for language in ("eng", "tha"):
-        shutil.copy2(source / f"tessdata/{language}.traineddata", destination / f"tessdata/{language}.traineddata")
-    shutil.copy2(source / "tessdata/configs/tsv", destination / "tessdata/configs/tsv")
-    shutil.copy2(source / "doc/LICENSE", destination / "LICENSE")
-    if (source / "tessdata/LICENSE").is_file():
-        shutil.copy2(source / "tessdata/LICENSE", destination / "tessdata/LICENSE")
-    # Distribution notices supplied alongside this installed Windows build.
-    for pattern in ("*COPYING*", "*LICENSE*", "*copyright*", "*license*"):
-        for notice in (source / "doc").rglob(pattern):
-            if notice.is_file() and notice.name != "LICENSE":
-                target = destination / "licenses" / notice.relative_to(source / "doc")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(notice, target)
 
 
 def source_version() -> str:
@@ -110,7 +84,6 @@ def main() -> int:
         str(compiler), "/nologo", "/target:winexe", "/optimize+", "/platform:anycpu",
         f"/out:{driver / 'node.exe'}", str(ROOT / "tools/playwright_node_gui_launcher.cs"),
     ], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-    bundle_ocr(distribution)
     shutil.copy2(ROOT / "docs/QUICK_START.md", distribution / "Quick start.md")
     destination = ROOT / "portable"
     if destination.exists():
@@ -124,7 +97,7 @@ def main() -> int:
         "status": "built", "version": source_version(), "exe": str(executable),
         "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
         "local_build": str(local), "build_log": str(build_log),
-        "bundled_browser": True, "bundled_ocr": True, "contains_credentials": False,
+        "bundled_browser": True, "bundled_ocr": False, "contains_credentials": False,
         "icon_sha256": hashlib.sha256(icon.read_bytes()).hexdigest(),
     }
     verification = ROOT / "docs/verification"

@@ -18,7 +18,7 @@ from typing import Any
 
 from . import VERSION
 from .activity import ActivityHistory, read_activity, update_latest
-from .evidence import IMAGE_SUFFIXES, today
+from .evidence import today
 from .settings import import_settings, load_settings, save_settings, validate_settings
 from .storage import History, WorkerLock, timestamp
 from .workflow import STEPS, run_cycle
@@ -68,7 +68,7 @@ class Application(ttk.Frame):
         self.busy_buttons: list[Any] = []
         self.status = tk.StringVar(value="Ready")
         self.summary = tk.StringVar(value="No requests yet")
-        self.current_step = tk.StringVar(value="60-second mail window · Search Pre + Post · Two attempts per round · Busy accounts keep waiting")
+        self.current_step = tk.StringVar(value="70-second mail trigger · All today's KDE files · Skip if present in either destination · One retry")
         self.filter = tk.StringVar()
         self.follow_history = tk.BooleanVar(value=True)
         self.history_count = tk.StringVar(value="0 events")
@@ -119,13 +119,12 @@ class Application(ttk.Frame):
         self.busy_buttons.append(self.start_button)
         self.stop_button = ttk.Button(toolbar, text="Stop", command=self.stop, state="disabled")
         self.stop_button.pack(side="left", padx=6)
-        ttk.Button(toolbar, text="Import image", command=self.import_image).pack(side="left", padx=(8, 6))
-        ttk.Button(toolbar, text="Review request", command=self.review_request).pack(side="left")
+        ttk.Button(toolbar, text="Round details", command=self.review_request).pack(side="left", padx=(8, 6))
+        ttk.Button(toolbar, text="Request download round", command=self.retry_failed).pack(side="left")
         tools = ttk.Menubutton(toolbar, text="Tools")
         menu = tk.Menu(tools, tearoff=False)
         menu.add_command(label="Check connection", command=lambda: self.start("check"))
         menu.add_command(label="Repair pending saves", command=self.repair_saves)
-        menu.add_command(label="Retry deferred requests", command=self.retry_failed)
         menu.add_separator()
         menu.add_command(label="Import settings", command=self.import_configuration)
         menu.add_command(label="Import old history", command=self.import_history)
@@ -158,10 +157,10 @@ class Application(ttk.Frame):
         self.tabs.add(page, text="Monitor")
         self.monitor_page = page
         self.job_table = self.make_table(page, ("order", "account", "subject", "status", "ready", "attempts", "reference"),
-                                         ("#", "Account", "Email / image", "Status", "Wait", "Attempts", "Reference"),
+                                         ("#", "Account", "Download round", "Status", "Wait", "Attempts", "Result"),
                                          (45, 85, 260, 160, 70, 70, 255))
         self.job_table.bind("<Double-1>", lambda _event: self.review_request())
-        ttk.Label(page, text="Pending requests stay saved. Missing files wait for a new email; busy accounts retry every minute.").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(page, text="Mail arrivals trigger a 70-second wait. Download all today's files; retry a failed account once after 60 seconds.").grid(row=2, column=0, sticky="w", pady=(8, 0))
 
     def build_activity(self) -> None:
         page = ttk.Frame(self.tabs, padding=10)
@@ -241,14 +240,15 @@ class Application(ttk.Frame):
         advanced = ttk.Button(buttons, text="More options", command=self.advanced_settings)
         advanced.pack(side="left", padx=10)
         self.busy_buttons.append(advanced)
-        ttk.Label(page, text="Search both enabled Pre/Post accounts. Save directly in the selected folders.\nFixed 60-second window · One retry per round · Deferred files resume on new relevant mail", wraplength=1050).grid(row=8, column=0, columnspan=3, sticky="w")
+        ttk.Label(page, text="Download all today's files from both enabled accounts. Skip if the filename exists in either destination.\n70 seconds after mail arrives · No email text matching or OCR · One retry after 60 seconds", wraplength=1050).grid(row=8, column=0, columnspan=3, sticky="w")
 
     def advanced_settings(self) -> None:
         window = tk.Toplevel(self.root)
         window.title("More options")
         window.transient(self.root)
         window.columnconfigure(1, weight=1)
-        fields = [("Outlook poll (seconds)", "mail_poll_seconds"), ("Messages per folder", "mail_watch.max_messages_per_folder"),
+        fields = [("Incoming folder (optional)", "mail_watch.folder_path"),
+                  ("Outlook poll (seconds)", "mail_poll_seconds"), ("Messages per folder", "mail_watch.max_messages_per_folder"),
                   ("Portal page limit", "max_pages"), ("Page timeout (seconds)", "page_timeout_seconds"),
                   ("Delay between files (seconds)", "download_delay_seconds"), ("Browser path (optional)", "chrome_path")]
         local = {}
@@ -370,57 +370,15 @@ class Application(ttk.Frame):
         self.worker = threading.Thread(target=work, daemon=False)
         self.worker.start()
 
-    def import_image(self) -> None:
-        path = filedialog.askopenfilename(parent=self.root, title="Import a screenshot or image",
-                                          filetypes=[("Images", " ".join("*" + suffix for suffix in sorted(IMAGE_SUFFIXES)))])
-        if not path:
-            return
-        window = tk.Toplevel(self.root)
-        window.title("Image request")
-        window.transient(self.root)
-        ttk.Label(window, text=Path(path).name, wraplength=500).pack(padx=20, pady=14)
-        ttk.Label(window, text="Which account should receive this request?").pack(padx=20)
-        side = tk.StringVar(value="Pre")
-        ttk.Combobox(window, textvariable=side, values=["Pre", "Post"], state="readonly").pack(padx=20, pady=10)
-        def submit():
-            if not self.worker or not self.worker.is_alive():
-                self.start("watch")
-            if self.worker and self.worker.is_alive():
-                self.requests.put({"kind": "image", "path": path, "side": side.get().lower()})
-                window.destroy()
-        ttk.Button(window, text="Read image & queue", command=submit).pack(padx=20, pady=14)
 
     def review_request(self) -> None:
         selected = self.job_table.selection()
         if not selected:
             return
         job = self.jobs[selected[0]]
-        if job["status"] not in {"review", "exhausted", "deferred"}:
-            details = f"{job.get('subject', '')}\n\n{job.get('last_reason', '')}\n\n" + "\n".join(job["lookup"])
-            messagebox.showinfo("Request details", details, parent=self.root)
-            return
-        window = tk.Toplevel(self.root)
-        window.title("Review request")
-        window.transient(self.root)
-        ttk.Label(window, text=job.get("subject", ""), wraplength=600).pack(padx=20, pady=12)
-        ttk.Label(window, text=job.get("last_reason", ""), wraplength=600).pack(padx=20)
-        accounts = {account["label"]: account["username"] for account in self.settings["accounts"] if account["enabled"]}
-        account = tk.StringVar(value=job["label"] if job["label"] in accounts else next(iter(accounts), ""))
-        ttk.Combobox(window, textvariable=account, values=list(accounts), state="readonly").pack(padx=20, pady=10)
-        ttk.Label(window, text="Confirm the filename or business reference").pack(padx=20)
-        reference = tk.Text(window, width=75, height=6, wrap="word")
-        reference.pack(padx=20, pady=10)
-        reference.insert("1.0", "\n".join(job["lookup"]))
-        def submit():
-            value = reference.get("1.0", "end").strip()
-            if not value or account.get() not in accounts:
-                return
-            if not self.worker or not self.worker.is_alive():
-                self.start("watch")
-            if self.worker and self.worker.is_alive():
-                self.requests.put({"kind": "review", "id": job["id"], "account": accounts[account.get()], "reference": value})
-                window.destroy()
-        ttk.Button(window, text="Confirm & queue", command=submit).pack(padx=20, pady=14)
+        details = f"{job.get('subject', '')}\n\n{job.get('last_reason', '')}\n\nAttempts: {job['attempts']}/2\nDate: {job.get('work_date', today())}"
+        messagebox.showinfo("Download round details", details, parent=self.root)
+        return
 
     def retry_failed(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -537,7 +495,7 @@ class Application(ttk.Frame):
             wait = f"{remaining // 60}:{remaining % 60:02}" if remaining else ""
             label = "Account busy" if job["status"] == "waiting" and job.get("busy_sources") else JOB_LABELS.get(job["status"], job["status"])
             values = (position, job["label"], job.get("subject") or "Email request", label,
-                      wait, f"{job['attempts']}/2", ", ".join(job["lookup"])[:220])
+                      wait, f"{job['attempts']}/2", job.get("last_reason", "")[:220])
             if self.job_table.exists(job["id"]):
                 self.job_table.item(job["id"], values=values)
                 self.job_table.move(job["id"], "", position - 1)
@@ -596,7 +554,7 @@ class Application(ttk.Frame):
         folder = Path(self.settings["log_dir"])
         def work():
             try:
-                self.events.put(("history", read_activity(folder)))
+                self.events.put(("history", read_activity(folder, exact_names=True)))
             except Exception as error:
                 self.events.put(("notice", f"History unavailable: {error}"))
         threading.Thread(target=work, daemon=True).start()
@@ -651,14 +609,14 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
             from unittest.mock import patch
             moment = time.time()
             for index, status in enumerate(("complete", "waiting", "review", "running", "deferred", "waiting")):
-                app.jobs[str(index)] = {"id": str(index), "subject": ["Pre payment notification", "Post review files", "Image reference needs confirmation", "Post results notice", "File not published yet", "Post account is in use"][index],
+                app.jobs[str(index)] = {"id": str(index), "subject": ["Today's files checked", "Next daily download round", "Credentials need attention", "Downloading today's files", "Two attempts used", "Post account is in use"][index],
                                         "label": "Pre" if index % 2 == 0 else "Post", "status": status,
-                                        "attempts": 2 if index == 4 else 1 if index in {0, 3} else 0,
-                                        "due": moment + 60, "sequence": index + 1, "lookup": {"payment online 67097": "Image OCR"}}
+                                        "attempts": 2 if index == 4 else 1 if index in {0, 3, 5} else 0,
+                                        "due": moment + (60 if index == 5 else 70), "sequence": index + 1, "lookup": {}, "last_reason": "All files dated today; skip if present in either destination"}
                 if index == 5:
                     app.jobs[str(index)]["busy_sources"] = ["offline-post"]
             for index in range(12):
-                reason = "Access denied while saving the final file" if index == 10 else ["Email joined the 60-second window", "Image OCR reference found", "Login succeeded", "File matched", "Download validated locally", "Final file saved", "Logout complete"][index % 7]
+                reason = "Access denied while saving the final file" if index == 10 else ["Mail arrival opened a 70-second window", "Today's portal date confirmed", "Login succeeded", "Both destinations checked", "Download validated locally", "Final file saved", "Logout complete"][index % 7]
                 app.accept_event({"key": f"sample-{index}", "time": f"{today()}T10:02:{index:02}+07:00", "step": 7 if index == 10 else 2 + index % 6,
                                   "status": "error" if index == 10 else "stage_complete", "reason": reason, "account": "Pre" if index % 2 == 0 else "Post",
                                   "filename": f"Sample request {index + 1}", "destination": r"\\10.0.0.97\Z Bot KDE", "attempt": 1})
@@ -690,7 +648,7 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
             app.set_busy(False)
             app.stop_event.clear()
             app.fill_settings()
-            app.status.set("Monitoring today's mail · Search round active · Pre + Post")
+            app.status.set("Watching data mail arrivals · Today's files only · Active accounts 1/2")
             smoke_screenshot.parent.mkdir(parents=True, exist_ok=True)
             def screenshot(page, path):
                 app.tabs.select(page)
@@ -710,6 +668,8 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                       "max_session_attempts": 2, "today_only": app.settings["mail_watch"]["today_only"],
                       "deferred_status_visible": any("Waiting for new email" in app.job_table.item(key, "values") for key in app.job_table.get_children()),
                       "busy_status_visible": any("Account busy" in app.job_table.item(key, "values") for key in app.job_table.get_children()),
+                      "download_policy": "daily_all", "email_content_matching": False, "ocr_enabled": False,
+                      "skip_either_destination": True, "busy_attempts_total": 2,
                       "includes_read_mail": not app.settings["mail_watch"]["unread_only"], "machine": socket.gethostname(), "live_portal_access": False}
             if smoke_report:
                 smoke_report.write_text(json.dumps(report, indent=2), encoding="utf-8")

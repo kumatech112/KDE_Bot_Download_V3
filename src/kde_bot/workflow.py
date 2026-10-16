@@ -60,7 +60,7 @@ def detect_chrome() -> str:
 
 class StructuredDownloader(core.KdeDownloader):
     def __init__(self, settings: core.Settings, reporter: Reporter, delivery: Delivery,
-                 configuration: dict[str, Any], stop_event: threading.Event):
+                 configuration: dict[str, Any], stop_event: threading.Event, read_evidence: bool = True):
         super().__init__(settings, self.protocol_message, stop_event)
         self.reporter = reporter
         self.delivery = delivery
@@ -83,8 +83,8 @@ class StructuredDownloader(core.KdeDownloader):
         self.row_jobs: dict[int, set[str]] = {}
         self.job_statuses: dict[str, list[str]] = {}
         self.required_matches: dict[str, set[str]] = {}
-        self.evidence_reader = MailEvidenceReader()
-        self.mail_evidence_reader = self.evidence_reader.read
+        self.evidence_reader = MailEvidenceReader() if read_evidence else None
+        self.mail_evidence_reader = self.evidence_reader.read if self.evidence_reader else None
 
     def _match_single_mail_key(self, kde_key, mail_key, original):
         if any(source in original for source in ("[Email instruction]", "[Email body words]")):
@@ -264,10 +264,10 @@ class StructuredDownloader(core.KdeDownloader):
                         raise RuntimeError("Portal list changed after matching; refusing to click a different file.")
                     row_index, row = matches[0]
                     self.row_jobs = {row_index: matched_jobs[identifier]}
-                    self.reporter.emit(4, "stage_complete", "Matched email evidence, account and business date", account.label, row["filename"])
+                    self.reporter.emit(4, "stage_complete", getattr(self, "selection_reason", "Matched email evidence, account and business date"), account.label, row["filename"])
                     status = self.handle_file(page, row_index, row, account, timeout_ms)
                     result["downloaded" if status == "complete" else "skipped" if status == "skipped" else "errors"] += 1
-                    if self.stop_event.wait(self.settings.download_delay_seconds):
+                    if (status != "skipped" or getattr(self, "delay_on_skipped", True)) and self.stop_event.wait(self.settings.download_delay_seconds):
                         return result
             if page_number > lowest and not self._previous_page(page, timeout_ms):
                 if self.stop_event.is_set():
@@ -456,7 +456,7 @@ def make_engine_settings(settings: dict[str, Any], state_file: Path) -> core.Set
     raw["chrome_path"] = settings["chrome_path"] or detect_chrome()
     mail = raw["mail_watch"]
     mail["filename_regex"] = mail["filename_regex"] or core.DEFAULT_MAIL_FILENAME_REGEX
-    raw["mail_watch"] = core.MailWatchSettings(**mail)
+    raw["mail_watch"] = core.MailWatchSettings(**{field.name: mail[field.name] for field in dataclasses.fields(core.MailWatchSettings)})
     raw["accounts"] = [
         core.Account(account["label"], account["username"], account["password"],
                      selected_folders(settings, account)[0], account["enabled"])
@@ -479,10 +479,7 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
         reporter = Reporter(history, callback)
         reporter.secrets = [account["password"] for account in settings["accounts"] if account["password"]]
         reporter.emit(1, "running", "Checking this Windows user's environment")
-        folders = list(dict.fromkeys(
-            path for account in settings["accounts"] if account["enabled"]
-            for path in selected_folders(settings, account)
-        ))
+        folders = list(dict.fromkeys((Path(settings["original_dir"]), Path(settings["new_dir"]))))
         if not scan_only:
             for folder in folders:
                 check_destination(folder)
@@ -492,8 +489,9 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
         reporter.emit(1, "stage_complete", reason)
         delivery = Delivery(history, reporter)
         with tempfile.TemporaryDirectory(prefix="kde-v3-") as temporary:
+            from .daily_download import DailyDelivery, DailyDownloader, run_daily_monitor, scan_arrivals
             engine_settings = make_engine_settings(settings, Path(temporary) / "engine-state.json")
-            engine = StructuredDownloader(engine_settings, reporter, delivery, settings, stop_event)
+            engine = DailyDownloader(engine_settings, reporter, delivery, settings, stop_event)
             if check_only:
                 browser_options = engine._browser_launch_kwargs()
                 browser = browser_options.get("executable_path", "")
@@ -503,7 +501,7 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
                 return reporter.counts
             # Pending deliveries are repaired without requiring the original mail to remain unread.
             for record in list(history.data["files"].values()):
-                if scan_only:
+                if not retry_only:
                     break
                 if stop_event.is_set():
                     break
@@ -517,35 +515,27 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
                 def cannot_redownload(_target: Path) -> Path:
                     raise FileNotFoundError("Validated source is unavailable; a new mail/download request is required.")
 
-                delivery.deliver(
+                repair_delivery = DailyDelivery(history, reporter) if record.get("download_policy") == "daily_all" else delivery
+                repair_delivery.deliver(
                     account["username"], record["filename"], selected_folders(settings, account),
                     cannot_redownload,
                     [Path(settings["original_dir"]), Path(settings["new_dir"])],
                 )
-            queue_state = MailQueue(history, reporter, settings, today())
-            queue_state.refresh_saved_jobs()
-            if requests is not None:
-                reporter.callback({"kind": "queue", "jobs": queue_state.snapshot()})
             if retry_only or stop_event.is_set():
                 reporter.emit(8, "summary", "Pending-save repair finished")
                 return reporter.counts
             if scan_only:
                 reporter.emit(2, "running", "Reading the local Outlook mailbox")
                 try:
-                    engine.mail_filename_lookup = engine.scan_mail_filenames()
+                    arrivals = scan_arrivals(settings, stop_event)
                 except Exception as error:
                     reporter.emit(2, "error", f"{type(error).__name__}: {error}", persist=True, count=True)
                     return reporter.counts
-                if engine.mail_failures:
-                    reporter.emit(2, "error", " | ".join(engine.mail_failures), persist=True, count=True)
-                    return reporter.counts
                 reporter.emit(2, "stage_complete",
-                              f"Found {len(engine.mail_filename_lookup)} matching references")
+                              f"Found {len(arrivals)} incoming mail IDs; contents were not read")
                 reporter.emit(8, "summary", "Email scan finished; KDE was not opened")
                 return reporter.counts
-            if requeue_failed:
-                MailQueue(history, reporter, settings, today()).requeue_failed(time.time())
-            run_mail_monitor(settings, stop_event, reporter, history, Path(temporary), watch, requests)
+            run_daily_monitor(settings, stop_event, reporter, history, Path(temporary), watch, requests, requeue_failed)
         history.save()
         return reporter.counts
 

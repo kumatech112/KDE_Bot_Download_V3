@@ -9,7 +9,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .storage import CSV_FIELDS, record_key
+from .storage import CSV_FIELDS, record_key, exact_record_key
 
 
 def event_identity(event: dict[str, Any]) -> str:
@@ -54,7 +54,7 @@ class ActivityHistory:
             self.add(event)
 
 
-def read_activity(folder: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def read_activity(folder: Path, exact_names: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Read the latest three monthly CSVs without inventing missing historical actions."""
     activity = ActivityHistory()
     latest: OrderedDict[str, dict[str, Any]] = OrderedDict()
@@ -69,7 +69,8 @@ def read_activity(folder: Path) -> tuple[list[dict[str, Any]], list[dict[str, An
                     if isinstance(value, str) and value.startswith(("'=", "'+", "'-", "'@")):
                         row[field] = value[1:]
                 row["step"] = int(row["step"])
-                row["key"] = record_key(row["account"], row["filename"]) if row["filename"] else f"stage:{row['account']}:{row['step']}"
+                file_key = exact_record_key if exact_names else record_key
+                row["key"] = file_key(row["account"], row["filename"]) if row["filename"] else f"stage:{row['account']}:{row['step']}"
                 activity.add(row)
                 update_latest(latest, row)
     activity.merge([])

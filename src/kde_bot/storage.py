@@ -36,6 +36,10 @@ def record_key(account: str, filename: str) -> str:
     return hashlib.sha256(f"{account.casefold()}|{identity}".encode("utf-8")).hexdigest()
 
 
+def exact_record_key(account: str, filename: str) -> str:
+    return hashlib.sha256(f"daily|{account.casefold()}|{filename.casefold()}".encode("utf-8")).hexdigest()
+
+
 class WorkerLock:
     """Windows/SMB byte-range lock: automatically released when the process exits."""
 
@@ -205,6 +209,23 @@ class History:
             generation = job.get("round_generation", 0)
             if not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or not isinstance(generation, int) or generation < 0:
                 raise ValueError("Invalid email window: original state preserved.")
+        daily = self.data.get("daily_watch")
+        if daily is not None:
+            if (not isinstance(daily, dict) or not isinstance(daily.get("day"), str)
+                    or not isinstance(daily.get("seen"), list) or not all(isinstance(value, str) for value in daily["seen"])
+                    or not isinstance(daily.get("sequence"), int) or daily["sequence"] < 0
+                    or not isinstance(daily.get("jobs"), dict)):
+                raise ValueError("Invalid daily download state; original data preserved.")
+            deadline = daily.get("pending_due")
+            if deadline is not None and (not isinstance(deadline, (int, float)) or not math.isfinite(deadline)):
+                raise ValueError("Invalid daily download deadline; original data preserved.")
+            for username, job in daily["jobs"].items():
+                if (not isinstance(job, dict) or job.get("account") != username
+                        or job.get("status") not in {"waiting", "running", "complete", "deferred", "review", "expired"}
+                        or not isinstance(job.get("attempts"), int) or not 0 <= job["attempts"] <= 2
+                        or not isinstance(job.get("due"), (int, float)) or not math.isfinite(job["due"])
+                        or not all(isinstance(job.get(field), str) for field in ("id", "account", "label", "work_date"))):
+                    raise ValueError("Invalid daily account queue; original data preserved.")
 
     def save(self) -> None:
         with self.lock:
@@ -247,7 +268,7 @@ class History:
                 self.data["files"][key] = {
                     field: value[field] for field in (
                         "account", "filename", "imported", "source_hint", "downloaded_at",
-                        "sha256", "size", "destinations", "pending",
+                        "sha256", "size", "destinations", "pending", "download_policy",
                     ) if field in value
                 }
                 count += 1
@@ -268,6 +289,7 @@ class Reporter:
         self.run_id = uuid.uuid4().hex[:12]
         self.counts = {"complete": 0, "skipped": 0, "copy_pending": 0, "error": 0}
         self.secrets: list[str] = []
+        self.file_key = record_key
         self.activity_last: dict[tuple[str, str, int], list[Any]] = {}
 
     def redact(self, text: Any) -> str:
@@ -284,7 +306,7 @@ class Reporter:
     def _emit(self, step: int, status: str, reason: str, account: str = "",
              filename: str = "", destination: str = "", persist: bool = False,
              sha256: str = "", count: bool = False) -> dict[str, Any]:
-        key = record_key(account, filename) if filename else f"stage:{account}:{step}"
+        key = self.file_key(account, filename) if filename else f"stage:{account}:{step}"
         previous = self.history.data["outcomes"].get(key, {})
         previous_status = previous.get("signature", [None, None])[1]
         if not filename and status == "stage_complete" and previous_status in {"error", "warning", "copy_pending"}:
@@ -342,6 +364,9 @@ class Delivery:
         self.index_stamps: dict[str, int] = {}
         self.index_lock = threading.RLock()
 
+    def record_identifier(self, account: str, filename: str) -> str:
+        return record_key(account, filename)
+
     def index(self, folder: Path, refresh: bool = False) -> dict[str, list[Path]]:
         with self.index_lock:
             return self._index(folder, refresh)
@@ -384,7 +409,7 @@ class Delivery:
 
     def _deliver(self, account: str, filename: str, folders: list[Path],
                  download: Callable[[Path], Path], recovery_folders: list[Path] | None = None) -> str:
-        key = record_key(account, filename)
+        key = self.record_identifier(account, filename)
         with self.history.lock:
             record = copy.deepcopy(self.history.data["files"].get(key, {}))
         stage = 5

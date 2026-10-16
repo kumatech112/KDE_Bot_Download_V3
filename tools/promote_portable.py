@@ -66,13 +66,16 @@ def main() -> int:
         report = json.loads((ROOT / "docs/verification" / name).read_text(encoding="utf-8"))
         if report.get("exe_sha256") != metadata["sha256"] or report.get("live_portal_access") is not False:
             raise ValueError("Actual executable verification is missing or belongs to another bundle")
-        if name.startswith("packaged") and report.get("status") != "passed":
+        if name.startswith("packaged") and (report.get("status") != "passed" or report.get("download_policy") != "daily_all" or report.get("ocr_enabled") is not False):
             raise ValueError("Packaged self-check failed")
         if name.startswith("gui") and (report.get("version") != metadata["version"] or not report.get("gui_started") or report.get("mail_queue_rows", 0) < 1
                                        or report.get("activity_rows", 0) < 1 or report.get("fixed_step_checklist") is not False
                                        or not report.get("history_search_passed") or not report.get("readable_event_details")
                                        or report.get("language") != "en" or report.get("tab_count") != 3
-                                       or not report.get("auto_start_passed") or report.get("mail_delay_seconds") != 60
+                                       or not report.get("auto_start_passed") or report.get("mail_delay_seconds") != 70
+                                       or report.get("download_policy") != "daily_all" or report.get("email_content_matching") is not False
+                                       or report.get("ocr_enabled") is not False or report.get("skip_either_destination") is not True
+                                       or report.get("busy_attempts_total") != 2
                                        or not report.get("deferred_status_visible") or not report.get("busy_status_visible")
                                        or not report.get("password_toggle_passed") or not report.get("stop_control_passed")
                                        or not report.get("includes_read_mail") or not report.get("today_only")
