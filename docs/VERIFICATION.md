@@ -30,9 +30,9 @@
 
 Verified EXE SHA-256: `fabf6676480cc880e497e3d72485758f80dac772e14f690a5fc349126b35e991`
 
-Verified release folder: `portable-20261016-101235`.
+Verified release folder: `portable`.
 
-The old `portable` EXE was still open when replacement was checked. Windows refused an exclusive open, so the running old bundle is preserved until its window is closed. The tested replacement is usable from the verified release folder; it must not monitor the same shared Log concurrently with the old app. Only EXE, _internal and Quick start.md are distributed.
+After the user closed the old KDE window, Windows released the executable. The verified 3.2.0 bundle was promoted to `portable`, its EXE hash was rechecked, and the identified old bundle was removed. No staged or previous portable folders remain. Only EXE, _internal and Quick start.md are distributed. Local settings, cached sources, shared history and business files were preserved.
 
 ## Deployment boundary
 
