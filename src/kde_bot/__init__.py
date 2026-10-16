@@ -1,3 +1,3 @@
 """KDE Bot Download V3: a standalone Thai desktop downloader."""
 
-VERSION = "3.1.4"
+VERSION = "3.2.0"

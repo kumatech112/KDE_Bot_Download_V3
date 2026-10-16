@@ -1,66 +1,53 @@
-# KDE Bot Download V3 — 3.1.4
+# KDE Download — 3.2.0
 
-โปรแกรมดาวน์โหลด KDE โดยเฉพาะ ใช้ GUI ภาษาไทยแบบ Tkinter/ttk ดั้งเดิม ไม่มีตัวเลือก Theme
+A dedicated Windows KDE downloader with a small English interface: **Monitor**, **History**, and **Settings**. Native ttk controls, no theme selector.
 
-## เปิดใช้งาน
+Open **portable\KDE Bot Download V3.exe**. Keep **_internal** beside it. The browser and English/Thai OCR engine are included; the deployment machine does not need Python or a separate Tesseract installation.
 
-ดับเบิลคลิก **portable\KDE Bot Download V3.exe** ไม่ต้องติดตั้ง Python
-เก็บโฟลเดอร์ **_internal** ไว้คู่ EXE เสมอ อ่าน [คู่มือเริ่มใช้งาน](docs/คู่มือเริ่มใช้งาน.md) สำหรับตั้งค่าเครื่องใหม่
+Read [Quick Start](docs/QUICK_START.md) for setup and daily use.
 
-เลือก **เฝ้ารออีเมล** หรือ **ตรวจเมลและทำคิวครั้งเดียว** หลังตั้งค่า ไม่มีรอบ Login KDE ตามเวลา
-อ่าน Outlook ในเครื่องทุก 15 วินาที เมลตรงกฎเข้าคิวหน่วง 3 นาที แล้วเปิด Browser แยก Pre/Post พร้อมกันได้
-ไม่พบ/โหลดไม่ได้: Logout และ Login ใหม่ รวมไม่เกิน 2 ครั้ง Login ไม่ได้รอ 5 นาที
-เมลสำเร็จแล้วไม่ทำซ้ำแม้ยัง unread คิว/จำนวนครั้งยังอยู่หลังเปิดใหม่
-รหัสผ่านและค่าตั้งต้นแยกตาม Windows user/เครื่อง ไม่เก็บใน GitHub หรือโฟลเดอร์โปรแกรมร่วม
+## Behavior
 
-แท็บ **ประวัติการทำงาน** แสดงเหตุการณ์ตามเวลา: บัญชี การทำงาน ผล ชื่อไฟล์/อีเมล และสาเหตุ
-เก็บข้อผิดพลาด การลองใหม่ และความสำเร็จไว้ให้ดูย้อนหลัง ดับเบิลคลิกเพื่อดูปลายทาง/รอบงาน/เครื่องที่รัน
-โหลดประวัติจาก CSV 3 เดือนล่าสุด แสดงล่าสุดไม่เกิน 2,000 รายการ ค้นหาได้ และไม่เพิ่มแถวเมลว่างซ้ำทุก 15 วินาที
-Complete/Error แสดงผลปัจจุบันของแต่ละรายการ เมื่อแก้สำเร็จ Error จะหาย แต่เหตุการณ์เดิมยังอยู่ในประวัติ
+- Starts monitoring automatically after valid local account setup.
+- Tracks today's incoming Outlook messages in Bangkok time, including read mail; processed message IDs prevent repeated work.
+- Uses subject/body references, attachment filenames and local image OCR. **Import image** supports separate screenshots.
+- Waits **two minutes** after discovery, then queues the matching Pre/Post account.
+- Each account handles one request at a time, in order. The two accounts can work concurrently. New requests cannot overtake an earlier request or its retry.
+- No idle KDE login loop. Two attempts total per request, fresh logout/session between attempts; busy/login failures wait five minutes.
+- Checks account, business numbers, dates and full-catalogue ambiguity before downloading. Unclear OCR/routing is visible for review.
+- Downloads and validates locally, then publishes only the final business filename. No destination test files, logs, account folders or .part sidecars. Existing content is preserved.
+- Retains failed-save sources locally for repair without another portal download. Shared state and monthly CSV preserve attempts, outcomes and history.
 
-สแกนเฉพาะโฟลเดอร์อีเมล ไม่ใช้ตัวกรอง UnRead กับ Notes/Calendar/Contacts แต่ยังตรวจโฟลเดอร์เมลย่อยภายใน
-หาก Outlook ไม่รองรับตัวกรอง ใช้การตรวจสถานะเมลทีละรายการในจำนวนที่ตั้งไว้ และแจ้งข้อมูลแทน Error เทียม
+## Default destinations
 
-| ตำแหน่ง | หน้าที่ |
+| Purpose | Folder |
 |---|---|
-| portable | โปรแกรมพร้อมใช้งาน: EXE, _internal, คู่มือ |
-| src | โค้ด KDE และ GUI |
-| tools | ตัวสร้าง Portable และตัวเปิด source |
-| tests | ทดสอบกฎจับคู่ การเก็บไฟล์และการตั้งค่า |
-| docs | คู่มือและรายละเอียดการเปลี่ยนแปลง |
-| assets | ไอคอนโปรแกรม |
+| Original files | `\\10.0.0.243\pgp-data$` |
+| New files | `\\10.0.0.97\Z Bot KDE` |
+| Shared history / queue | `\\10.0.0.97\Z Log\Log Bot KDE` |
 
-## ปลายทางเริ่มต้น
+Choose original, new or both. Both accounts use the selected roots directly. Passwords/settings and pending local downloads live under `%LOCALAPPDATA%\KDE Bot Download V3`. The Log folder must be separate and writable. Actual final-file access depends on the launching Windows user; no app can bypass SMB permissions.
 
-- เดิม: **\\10.0.0.243\pgp-data$**
-- ใหม่: **\\10.0.0.97\Z Bot KDE**
-- Log/ประวัติ: **\\10.0.0.97\Z Log\Log Bot KDE**
+## Project layout
 
-เลือกเก็บทั้งสองที่ เฉพาะที่เดิม หรือเฉพาะที่ใหม่ได้
-Pre/Post เก็บไฟล์รวมโดยตรงในโฟลเดอร์ปลายทางที่เลือก ไม่สร้าง **01 Pre / 02 Post** หรือโฟลเดอร์แยกบัญชี
-การเปิดหรือนำเข้าค่าตั้งเดิมจะละทิ้งปลายทางเฉพาะบัญชี และใช้โฟลเดอร์เดิม/ใหม่ด้านบนร่วมกัน
-เมื่อเลือกทั้งสองที่ ดาวน์โหลดครั้งเดียวแล้วคัดลอกพร้อมตรวจ SHA-256
-ไฟล์ที่ขัดแย้งจะไม่ถูกเขียนทับ และไฟล์คัดลอกค้างสามารถลองใหม่โดยไม่ดาวน์โหลดซ้ำ
-Windows user ที่รันต้องเขียนไฟล์ในรากปลายทางได้ หาก `.243` แจ้ง Permission denied ให้แก้สิทธิ์บนแชร์ หรือเลือกเฉพาะที่ใหม่ระหว่างรอแก้สิทธิ์
-การตรวจปลายทางไม่สร้างไฟล์ **.kde-check**: ตรวจว่าโฟลเดอร์มีอยู่และเปิดอ่านรายการได้เท่านั้น สิทธิ์บันทึกจะตรวจเมื่อดาวน์โหลด/คัดลอกงานจริง
-การตรวจสิทธิ์เขียน/ลบไฟล์ทดสอบใช้เฉพาะโฟลเดอร์ Log ผลตรวจปลายทางอ่านได้ไม่ได้ยืนยันว่าสามารถบันทึกงานได้
+| Folder | Contents |
+|---|---|
+| portable | EXE, _internal, Quick start.md |
+| src | KDE application only |
+| tools | Build and verified release promotion |
+| tests | Matching, mail queue, OCR, delivery and history checks |
+| docs | Quick Start, function map, changes and verification |
+| assets | App icon |
 
-Log ใช้ CSV เดือนละไฟล์ และ KDE_State.json สำหรับประวัติกลางและคิวอีเมล
-ไฟล์ .kde.lock ขนาดเล็กป้องกันเครื่องหลายเครื่องทำงานพร้อมกัน
-ภายในเครื่องที่ทำงานเปิดสองบัญชีพร้อมกันได้ ไม่มีโฟลเดอร์ใหม่แยกตามรอบงาน
+Git excludes passwords, settings, business files, images/mail contents, runtime logs and portable binaries.
 
-## พัฒนาและตรวจสอบ
+## Development
 
-ใช้ Python 3.13 บน Windows ติดตั้งจาก requirements.txt
+Use Windows and Python 3.13 with `requirements.txt`. The local builder needs Playwright's pinned headless browser and Tesseract with English/Thai models. `KDE_BUILD_HOME` selects a local build drive; `KDE_OCR_HOME` selects the installed OCR build dependency.
 
-    python -m pip install -r requirements.txt
     python -m compileall -q src tools tests
-    python -m pytest -q
-    python src/main.py
+    python -m pytest tests -q -p no:cacheprovider
+    python src/main.py --self-check path-to-offline-report.json
     python tools/build_portable.py
 
-โปรแกรม Portable ไม่ต้องติดตั้ง Python แต่การจับคู่เมลต้องใช้ Outlook desktop แบบที่รองรับ COM และมี profile/mailbox บนเครื่องที่รัน
-Browser สำหรับ headless รวมอยู่ใน _internal
-ตัวสร้าง Portable ต้องมีพื้นที่ว่างอย่างน้อย 1 GiB ใน local builder กำหนด KDE_BUILD_HOME ไปที่ไดรฟ์อื่นได้เมื่อไดรฟ์ Temp มีพื้นที่ไม่พอ
-
-ดู [สถาปัตยกรรมและฟังก์ชัน](docs/ARCHITECTURE.md) และ [การเปลี่ยนแปลง](docs/CHANGES.md)
+See [Architecture and changed functions](docs/ARCHITECTURE.md), [Changes](docs/CHANGES.md), and [Verification boundaries](docs/VERIFICATION.md).

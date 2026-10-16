@@ -17,6 +17,98 @@ from .settings import atomic_json, default_settings, load_settings, save_setting
 from .storage import Delivery, History, Reporter, WorkerLock
 
 
+def check_portal_catalogue(root: Path) -> None:
+    """Exercise the real browser pagination selectors against local HTML only."""
+    from .legacy_core import sync_playwright_without_console
+    from .workflow import StructuredDownloader, make_engine_settings
+    from .evidence import today
+    from . import legacy_core as core
+    settings = default_settings()
+    settings["accounts"][0]["username"] = "offline-pre"
+    settings["download_delay_seconds"] = 0
+    settings["max_pages"] = 2
+    logs = root / "catalogue-logs"
+    logs.mkdir()
+    history = History(logs)
+    engine = StructuredDownloader(make_engine_settings(settings, root / "catalogue.json"),
+                                  Reporter(history, lambda _event: None),
+                                  Delivery(history, Reporter(history, lambda _event: None)), settings, threading.Event())
+    names = ["A1015_PAYMENT_ONLINE_67097_Alpha_16102026.zip.gpg", "A1015_PAYMENT_ONLINE_67097_Beta_16102026.zip.gpg"]
+    with sync_playwright_without_console(lambda _message: None) as playwright:
+        browser = playwright.chromium.launch(**engine._browser_launch_kwargs())
+        try:
+            page = browser.new_page()
+            page.set_content("""<table><tbody></tbody></table>
+                <button id='previous' aria-label='Go to previous page' onclick='window.pageIndex--;render()'>Previous</button>
+                <button id='next' aria-label='Go to next page' onclick='window.pageIndex++;render()'>Next</button>
+                <script>window.names=""" + json.dumps(names) + """;window.pageIndex=0;
+                function render(){document.querySelector('tbody').innerHTML='<tr><td>1</td><td>'+window.names[window.pageIndex]+'</td><td>16/10/2026</td><td>1 MB</td></tr>';
+                document.querySelector('#previous').disabled=window.pageIndex===0;
+                document.querySelector('#next').disabled=window.pageIndex===1;}render();</script>""")
+            broad = {"payment online 67097": "payment online 67097 [Subject key]"}
+            job = {"id": "offline-catalogue-job", "account": "offline-pre", "lookup": broad,
+                   "received": "2026-10-16T10:00:00", "work_date": "2026-10-16"}
+            engine.jobs = [job]
+            clicked = []
+            with patch.object(engine, "handle_file", side_effect=lambda _page, _index, row, _account, _timeout: clicked.append(row["filename"]) or "complete"):
+                result = engine._download_visible_pages(page, engine.settings.accounts[0], 5000, broad)
+                assert result["downloaded"] == 0 and clicked == []
+                page.evaluate("window.pageIndex=0;render()")
+                job["lookup"] = {core.normalize_filename_for_match(names[0]): names[0] + " [Image OCR]", **broad}
+                result = engine._download_visible_pages(page, engine.settings.accounts[0], 5000, job["lookup"])
+                assert result["downloaded"] == 1 and clicked == [names[0]]
+        finally:
+            browser.close()
+
+
+def check_agent_features(root: Path) -> None:
+    from PIL import Image, ImageDraw, ImageFont
+    from .evidence import LocalOCR, MailEvidenceReader, reference_lookup, today
+    from .mail_queue import MailQueue
+    from .settings import settings_home
+    from .storage import file_hash
+    image_path = root / "ocr-reference.png"
+    image = Image.new("RGB", (1600, 240), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(str(Path(os.environ["WINDIR"]) / "Fonts/arial.ttf"), 36)
+    draw.text((30, 30), "PRE PAYMENT ONLINE 67097", font=font, fill="black")
+    draw.text((30, 100), "A1015_PAYMENT_ONLINE_67097_16102026.zip.gpg", font=font, fill="black")
+    image.save(image_path)
+    recognized = LocalOCR().read(image_path)
+    assert recognized["confidence"] >= 70
+    assert "a1015_payment_online_67097_16102026.zip.gpg" in reference_lookup(recognized["text"], "Image OCR")
+    screenshot = MailEvidenceReader().screenshot(image_path, "pre")
+    assert screenshot["lookup"] and not screenshot["review"]
+    settings = default_settings()
+    settings["accounts"][0].update(username="offline-pre", password="offline-only")
+    settings["accounts"][1].update(username="offline-post", password="offline-only")
+    logs = root / "agent-logs"
+    logs.mkdir()
+    history = History(logs)
+    reporter = Reporter(history, lambda _event: None)
+    queue = MailQueue(history, reporter, settings, today())
+    queue.ingest([screenshot, {**screenshot, "entry_id": "second-request"}], 1000)
+    assert queue.claim_ready(1119, set()) == {}
+    first = queue.claim_ready(1120, set())["offline-pre"]
+    assert len(first) == 1 and queue.claim_ready(1121, set()) == {}
+    queue.finish({first[0]["id"]: {"kind": "login_failed", "reason": "offline busy user"}}, 1122)
+    assert queue.claim_ready(1421, set()) == {}
+    assert queue.claim_ready(1422, set())["offline-pre"][0]["id"] == first[0]["id"]
+    queue.finish({first[0]["id"]: {"kind": "complete", "reason": "offline success"}}, 1423)
+    assert queue.claim_ready(1423, set())["offline-pre"][0]["id"] != first[0]["id"]
+    cache = settings_home() / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    source = cache / "packaged-source.download"
+    source.write_bytes(b"packaged final-filename-only delivery")
+    target = root / "final-only"
+    target.mkdir()
+    delivery = Delivery(history, reporter)
+    assert delivery.deliver("offline-pre", "business.gpg", [target], lambda _path: source) == "complete"
+    assert {path.name for path in target.iterdir()} == {"business.gpg"}
+    assert (target / "business.gpg").read_bytes() == b"packaged final-filename-only delivery"
+    assert not source.exists()
+
+
 def check_destination_preflight(root: Path) -> None:
     """Run the real preflight while denying all writes in business destinations."""
     from .workflow import run_cycle
@@ -46,7 +138,7 @@ def check_destination_preflight(root: Path) -> None:
     for folder in destinations:
         assert {path.name for path in folder.iterdir()} == {"business-file.gpg"}
         assert (folder / "business-file.gpg").read_bytes() == b"offline existing file"
-    assert any("สิทธิ์บันทึกตรวจตอนดาวน์โหลดจริง" in event["reason"] for event in events)
+    assert any("save access is checked during real delivery" in event["reason"] for event in events)
 
 
 def check_flat_storage(root: Path) -> None:
@@ -137,6 +229,7 @@ def check_outlook_folder_filter(root: Path) -> None:
     outlook = SimpleNamespace(GetNamespace=lambda _name: SimpleNamespace(Folders=Items([mailbox])))
     settings = default_settings()
     logs = root / "outlook-filter-check"
+    settings["mail_watch"]["unread_only"] = True
     logs.mkdir()
     history = History(logs)
     events = []
@@ -248,21 +341,25 @@ def run_self_check(output: Path) -> int:
                            "lookup": {"payment online 67097": "payment online 67097"}}
                 assert mail_queue.claim_ready(0, set()) == {}
                 mail_queue.ingest([message], 1000)
-                assert mail_queue.claim_ready(1179, set()) == {}
-                batch = mail_queue.claim_ready(1180, set())["offline-user"]
+                assert mail_queue.claim_ready(1119, set()) == {}
+                batch = mail_queue.claim_ready(1120, set())["offline-user"]
                 job_id = batch[0]["id"]
                 mail_queue.finish({job_id: {"kind": "login_failed", "reason": "offline failure"}}, 1181)
                 assert mail_queue.claim_ready(1480, set()) == {}
                 assert mail_queue.claim_ready(1481, set())["offline-user"][0]["attempts"] == 2
                 mail_queue.finish({job_id: {"kind": "missing", "reason": "offline missing file"}}, 1482)
                 assert mail_queue.claim_ready(9999, set()) == {}
-            result["checks"].append("Packaged durable mail queue: no idle session; 180-second delay; 300-second cooldown; two attempts total")
+            result["checks"].append("Packaged durable mail queue: no idle session; 120-second delay; 300-second cooldown; two attempts total")
             check_outlook_folder_filter(root)
             result["checks"].append("Packaged Outlook scanner: skip Notes, scan mail children, recover rejected UnRead filter, ignore read/non-mail items; fake COM only")
             check_flat_storage(root)
             result["checks"].append("Two concurrent accounts store verified files directly in shared destination roots; legacy account subfolders ignored in all three modes")
             check_destination_preflight(root)
             result["checks"].append("Destination preflight creates no probe files and succeeds with business-folder writes denied; existing files preserved; Log probe retained")
+            check_agent_features(root)
+            result["checks"].append("Actual bundled English/Thai OCR reads a sample screenshot; strict FIFO, two-minute delay, busy-user retry and final-filename-only publication passed offline")
+            check_portal_catalogue(root)
+            result["checks"].append("Actual offline browser: previous/next pagination, cross-page ambiguity rejection and precise-reference precedence before any click")
         result["status"] = "passed"
         exit_code = 0
     except Exception as error:

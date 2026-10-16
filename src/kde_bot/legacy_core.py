@@ -1046,7 +1046,11 @@ class KdeDownloader:
         context.on("page", close_popup)
 
     def process_account(self, account: Account) -> dict[str, int]:
-        account.download_dir.mkdir(parents=True, exist_ok=True)
+        if getattr(self, "file_handler", None) is not None:
+            if not account.download_dir.is_dir():
+                raise FileNotFoundError(f"Download destination must already exist: {account.download_dir}")
+        else:
+            account.download_dir.mkdir(parents=True, exist_ok=True)
         self.state.setdefault("downloaded", {}).setdefault(account.username, {})
         result = {"downloaded": 0, "skipped": 0}
 
@@ -1110,7 +1114,8 @@ class KdeDownloader:
         if configured_pattern != DEFAULT_MAIL_FILENAME_REGEX or not filename_patterns:
             filename_patterns.append(re.compile(DEFAULT_MAIL_FILENAME_REGEX, re.IGNORECASE))
 
-        start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        from .evidence import BANGKOK
+        start = datetime.now(BANGKOK).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
         lookup: dict[str, str] = {}
         current_mail_lookup: dict[str, str] = {}
         self.mail_messages: list[dict[str, Any]] = []
@@ -1154,7 +1159,7 @@ class KdeDownloader:
             except Exception:
                 return None
             if isinstance(value, datetime):
-                return value.replace(tzinfo=None)
+                return value.astimezone(BANGKOK).replace(tzinfo=None) if value.tzinfo else value
             try:
                 return datetime.fromtimestamp(float(value))
             except Exception:
@@ -1411,6 +1416,19 @@ class KdeDownloader:
         def scan_folder(folder: Any, folder_path: str, matched_filter: bool = False) -> None:
             if self.stop_event and self.stop_event.is_set():
                 return
+            incoming_only = callable(getattr(self, "mail_evidence_reader", None))
+            if incoming_only:
+                folder_name = str(getattr(folder, "Name", "")).strip().casefold()
+                excluded_names = {"sent items", "sent", "drafts", "outbox", "deleted items", "junk email", "junk e-mail",
+                                  "รายการที่ส่ง", "แบบร่าง", "กล่องขาออก", "รายการที่ถูกลบ", "อีเมลขยะ"}
+                if folder_name in excluded_names:
+                    return
+                try:
+                    store = folder.Store
+                    if any(str(folder.EntryID) == str(store.GetDefaultFolder(kind).EntryID) for kind in (3, 4, 5, 16, 23)):
+                        return
+                except Exception:
+                    pass
             stats["folders"] += 1
             scan_items = matched_filter or folder_matches_filter(folder_path)
             items = None
@@ -1446,6 +1464,8 @@ class KdeDownloader:
                 if settings.today_only and received and received < start:
                     continue
                 if settings.today_only and not received:
+                    continue
+                if settings.today_only and received and received.date() != start.date():
                     continue
                 stats["messages"] += 1
                 if settings.unread_only and not is_unread(item):
@@ -1489,6 +1509,10 @@ class KdeDownloader:
                                 break
                         if not attachment_name:
                             continue
+                        if callable(getattr(self, "mail_evidence_reader", None)):
+                            from .evidence import IMAGE_SUFFIXES
+                            if Path(attachment_name).suffix.lower() in IMAGE_SUFFIXES:
+                                continue
                         stats["attachments"] += 1
                         before_attachment_keys = len(lookup)
                         add_from_text(
@@ -1517,7 +1541,17 @@ class KdeDownloader:
                                 add_subject_aliases(line, source_label)
                     except Exception:
                         pass
-                if current_mail_lookup:
+                evidence = {}
+                reader = getattr(self, "mail_evidence_reader", None)
+                if callable(reader):
+                    try:
+                        evidence = reader(item, subject, received)
+                        current_mail_lookup.update(evidence.get("lookup", {}))
+                        lookup.update(evidence.get("lookup", {}))
+                    except Exception as error:
+                        evidence = {"review": True, "relevant": "kde" in subject.lower(),
+                                    "notes": [f"Cannot read email evidence: {type(error).__name__}: {error}"]}
+                if current_mail_lookup or evidence.get("relevant"):
                     # Expose each message separately, including duplicate filenames.
                     # Outlook mail is never marked read or modified by this scanner.
                     try:
@@ -1533,6 +1567,7 @@ class KdeDownloader:
                         "received": received.isoformat() if received else "",
                         "subject": subject, "lookup": dict(current_mail_lookup),
                         "folder": folder_path,
+                        **{key: evidence[key] for key in ("side", "notes", "image_count", "review", "relevant") if key in evidence},
                     })
                 if len(lookup) > before_keys:
                     stats["mails_with_keys"] += 1

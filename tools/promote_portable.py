@@ -14,7 +14,8 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 EXE = "KDE Bot Download V3.exe"
-ALLOWED_TOP_LEVEL = {EXE, "_internal", "คู่มือเริ่มใช้งาน.md"}
+ALLOWED_TOP_LEVEL = {EXE, "_internal", "Quick start.md"}
+LEGACY_TOP_LEVEL = {EXE, "_internal", "คู่มือเริ่มใช้งาน.md"}
 
 
 def digest(path: Path) -> str:
@@ -25,7 +26,7 @@ def validate_bundle(path: Path, expected_hash: str) -> Path:
     resolved = path.resolve(strict=True)
     if resolved.parent != ROOT.resolve() or resolved.name not in {"portable", ".previous-portable"} and not re.fullmatch(r"portable-\d{8}-\d{6}", resolved.name):
         raise ValueError("Bundle must be a directly contained KDE portable directory")
-    if {item.name for item in resolved.iterdir()} != ALLOWED_TOP_LEVEL:
+    if {item.name for item in resolved.iterdir()} not in (ALLOWED_TOP_LEVEL, LEGACY_TOP_LEVEL):
         raise ValueError("Unexpected files in portable; preserve them before replacing the release")
     if digest(resolved / EXE) != expected_hash.casefold():
         raise ValueError("Executable differs from the explicitly identified bundle")
@@ -67,9 +68,12 @@ def main() -> int:
             raise ValueError("Actual executable verification is missing or belongs to another bundle")
         if name.startswith("packaged") and report.get("status") != "passed":
             raise ValueError("Packaged self-check failed")
-        if name.startswith("gui") and (report.get("version") != metadata["version"] or not report.get("gui_started") or report.get("mail_queue_rows") != 1
+        if name.startswith("gui") and (report.get("version") != metadata["version"] or not report.get("gui_started") or report.get("mail_queue_rows", 0) < 1
                                        or report.get("activity_rows", 0) < 1 or report.get("fixed_step_checklist") is not False
-                                       or not report.get("history_search_passed") or not report.get("readable_event_details")):
+                                       or not report.get("history_search_passed") or not report.get("readable_event_details")
+                                       or report.get("language") != "en" or report.get("tab_count") != 3
+                                       or not report.get("auto_start_passed") or report.get("mail_delay_seconds") != 120
+                                       or not report.get("includes_read_mail") or not report.get("today_only")):
             raise ValueError("Packaged GUI verification failed")
     old = validate_bundle(ROOT / "portable", arguments.expected_old_sha)
     reject_running_bundle(old)

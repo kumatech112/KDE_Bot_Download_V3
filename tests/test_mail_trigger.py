@@ -18,6 +18,7 @@ from kde_bot.mail_queue import MailQueue, message_identity
 from kde_bot.settings import default_settings, normalize_settings
 from kde_bot.storage import Delivery, History, Reporter
 from kde_bot.workflow import StructuredDownloader, make_engine_settings, run_mail_monitor, run_account_batch
+from kde_bot.evidence import today
 
 
 def configured(tmp_path):
@@ -33,7 +34,7 @@ def configured(tmp_path):
 
 def message(entry="one", side="pre", filenames=None):
     filenames = filenames or [f"A1015{'L' if side == 'post' else ''}_TEST_10102026.zip.gpg"]
-    return {"entry_id": entry, "store_id": "test-store", "received": "2026-10-10T08:00:00",
+    return {"entry_id": entry, "store_id": "test-store", "received": today() + "T08:00:00",
             "subject": side, "lookup": {core.normalize_filename_for_match(name): name for name in filenames}}
 
 
@@ -45,12 +46,12 @@ def setup_queue(tmp_path):
     return settings, history, events, reporter, MailQueue(history, reporter, settings)
 
 
-def test_new_mail_waits_180_seconds_and_rediscovery_does_not_restart_delay(tmp_path):
+def test_new_mail_waits_120_seconds_and_rediscovery_does_not_restart_delay(tmp_path):
     settings, history, events, reporter, queue = setup_queue(tmp_path)
     assert queue.ingest([message()], 1000) == 1
     assert queue.ingest([message()], 1100) == 0
-    assert queue.claim_ready(1179.99, set()) == {}
-    assert queue.claim_ready(1180, set())["account-0"][0]["attempts"] == 1
+    assert queue.claim_ready(1119.99, set()) == {}
+    assert queue.claim_ready(1120, set())["account-0"][0]["attempts"] == 1
     assert queue.claim_ready(1181, {"account-0"}) == {}
 
 
@@ -87,7 +88,11 @@ def test_login_cooldown_blocks_new_mail_for_same_account(tmp_path):
     queue.finish({job["id"]: {"kind": "login_failed", "reason": "blocked"}}, 190)
     queue.ingest([message("new")], 191)
     assert queue.claim_ready(489, set()) == {}
-    assert len(queue.claim_ready(490, set())["account-0"]) == 2
+    retry = queue.claim_ready(490, set())["account-0"]
+    assert len(retry) == 1 and retry[0]["id"] == job["id"]
+    assert queue.claim_ready(491, set()) == {}
+    queue.finish({job["id"]: {"kind": "complete", "reason": "recovered"}}, 492)
+    assert queue.claim_ready(492, set())["account-0"][0]["id"] != job["id"]
 
 
 def test_copy_failure_never_requests_another_portal_session(tmp_path):
@@ -115,14 +120,16 @@ def test_side_routing_and_duplicate_filename_messages_keep_separate_ids(tmp_path
     settings, history, events, reporter, queue = setup_queue(tmp_path)
     queue.ingest([message("one"), message("two"), message("post", "post")], 0)
     batches = queue.claim_ready(180, set())
-    assert len(batches["account-0"]) == 2 and len(batches["account-1"]) == 1
-    assert batches["account-0"][0]["id"] != batches["account-0"][1]["id"]
+    assert len(batches["account-0"]) == 1 and len(batches["account-1"]) == 1
+    pre_jobs = [job for job in queue.jobs.values() if job["account"] == "account-0"]
+    assert len(pre_jobs) == 2 and pre_jobs[0]["id"] != pre_jobs[1]["id"]
 
 
-def test_generic_mail_routes_to_both_enabled_accounts(tmp_path):
+def test_generic_mail_requires_account_review_without_opening_either_account(tmp_path):
     settings, history, events, reporter, queue = setup_queue(tmp_path)
     queue.ingest([message(side="", filenames=["payment online 67097"])], 0)
-    assert set(queue.claim_ready(180, set())) == {"account-0", "account-1"}
+    assert queue.claim_ready(180, set()) == {}
+    assert len(queue.jobs) == 1 and next(iter(queue.jobs.values()))["status"] == "review"
 
 
 def test_settings_migration_disables_old_portal_timer_policy():
@@ -132,7 +139,8 @@ def test_settings_migration_disables_old_portal_timer_policy():
     migrated = normalize_settings(old)
     assert migrated["mail_watch"]["enabled"]
     assert "busy_wait_seconds" not in migrated and "loop_wait_seconds" not in migrated
-    assert migrated["mail_delay_seconds"] == 180 and migrated["max_session_attempts"] == 2
+    assert migrated["mail_delay_seconds"] == 120 and migrated["max_session_attempts"] == 2
+    assert migrated["mail_watch"]["today_only"] and not migrated["mail_watch"]["unread_only"]
 
 
 class AcceleratedStop:
@@ -185,7 +193,7 @@ def test_monitor_runs_pre_post_concurrently_only_after_mail_delay(tmp_path):
             patch.object(StructuredDownloader, "scan_mail_filenames", scan), \
             patch("kde_bot.workflow.run_account_batch", side_effect=batch):
         run_mail_monitor(settings, AcceleratedStop(clock), reporter, history, tmp_path, False)
-    assert len(starts) == 2 and all(start >= 180 for _, start in starts)
+    assert len(starts) == 2 and all(start >= 120 for _, start in starts)
     assert all(job["status"] == "complete" for job in queue.jobs.values())
 
 
@@ -345,7 +353,7 @@ def test_corrupt_mail_queue_fails_without_reset_or_login(tmp_path):
     path = folder / "KDE_State.json"
     text = json.dumps({"version": 3, "files": {}, "outcomes": {}, "mail_jobs": {"broken": {"attempts": -1}}})
     path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match="คิวอีเมล"):
+    with pytest.raises(ValueError, match="Invalid email queue"):
         History(folder)
     assert path.read_text(encoding="utf-8") == text
 
@@ -360,8 +368,8 @@ def test_only_explicit_manual_retry_reopens_exhausted_mail_budget(tmp_path):
     assert queue.ingest([message()], 1000) == 0
     assert queue.claim_ready(1000, set()) == {}
     assert queue.requeue_failed(1000) == 1
-    assert queue.claim_ready(1179, set()) == {}
-    retry = queue.claim_ready(1180, set())["account-0"][0]
+    assert queue.claim_ready(1119, set()) == {}
+    retry = queue.claim_ready(1120, set())["account-0"][0]
     assert retry["attempts"] == 1 and retry["total_attempts"] == 3 and retry["cycle"] == 2
 
 

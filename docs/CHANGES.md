@@ -1,4 +1,19 @@
-# KDE Bot Download V3 — 3.1.4
+# KDE Bot Download V3 — 3.2.0
+
+- Replace the busy Thai interface with three English tabs: Monitor, History and Settings.
+- Start the configured monitor on launch; simplify primary actions and move uncommon settings/tools out of the main workflow.
+- Monitor today's incoming read/unread mail, preserve processed IDs, and exclude outgoing/default system folders.
+- Reduce the initial delay to 120 seconds; enforce one FIFO head per account, including retries, reviews and pending saves.
+- Add bundled English/Thai local image OCR for attachments, CID/data images and explicit screenshot import.
+- Add visible account/reference review and conservative OCR tolerance with numeric, side and date guards.
+- Check complete portal catalogues before selection, prefer precise evidence and reject cross-page ambiguity or changed rows.
+- Stage downloads locally, retain failed-save sources, and publish only final filenames with exclusive creation and reader locking.
+- Preserve DPAPI settings, shared state/monthly CSV, two total attempts, busy-user cooldown, independent sessions and logout cleanup.
+- Include an English quick-start guide and OCR runtime under the existing clean portable layout.
+
+Short commit message: feat: add English KDE mail agent with OCR and ordered queues
+
+## 3.1.4
 
 - Remove synthetic permission-test files from business download destinations.
 - Check destination existence and directory readability without creating, modifying or deleting files.

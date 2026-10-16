@@ -79,14 +79,14 @@ def test_download_failure_reports_step_six_and_preserves_other_files(delivery_co
 
 def test_destination_check_preserves_folder_access_denial(tmp_path):
     with patch("kde_bot.storage.os.scandir", side_effect=PermissionError("read denied")):
-        with pytest.raises(PermissionError, match="ไม่มีสิทธิ์อ่านรายการไฟล์"):
+        with pytest.raises(PermissionError, match="Cannot read the destination directory"):
             check_destination(tmp_path)
     assert list(tmp_path.iterdir()) == []
 
 
 def test_destination_check_does_not_create_missing_folder(tmp_path):
     missing = tmp_path / "missing"
-    with pytest.raises(FileNotFoundError, match="ไม่พบโฟลเดอร์ปลายทาง"):
+    with pytest.raises(FileNotFoundError, match="Destination folder is missing"):
         check_destination(missing)
     assert not missing.exists()
 

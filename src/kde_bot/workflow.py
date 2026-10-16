@@ -5,29 +5,27 @@ from __future__ import annotations
 import copy
 import dataclasses
 import os
+import queue
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
 from . import legacy_core as core
-from .settings import validate_settings
+from .settings import validate_settings, settings_home
 from .storage import Delivery, History, Reporter, WorkerLock, check_destination, check_writable
-from .mail_queue import MailQueue
+from .mail_queue import MailQueue, account_side
+from .evidence import MailEvidenceReader, today
+from .matching import ocr_match, row_matches_job_date
 
 
 STEPS = {
-    1: "ตรวจการตั้งค่าและสิทธิ์",
-    2: "ตรวจอีเมล Outlook",
-    3: "เข้าสู่ระบบ KDE",
-    4: "ค้นหาและจับคู่ไฟล์",
-    5: "ตรวจประวัติและไฟล์ปลายทาง",
-    6: "ดาวน์โหลดไฟล์",
-    7: "คัดลอกและตรวจสอบปลายทาง",
-    8: "ออกจากระบบและสรุปผล",
+    1: "Startup", 2: "Email", 3: "Login", 4: "Match",
+    5: "Check files", 6: "Download", 7: "Save", 8: "Logout",
 }
 
 
@@ -73,17 +71,115 @@ class StructuredDownloader(core.KdeDownloader):
         self.row_jobs: dict[int, set[str]] = {}
         self.job_statuses: dict[str, list[str]] = {}
         self.required_matches: dict[str, set[str]] = {}
+        self.evidence_reader = MailEvidenceReader()
+        self.mail_evidence_reader = self.evidence_reader.read
+
+    def _match_single_mail_key(self, kde_key, mail_key, original):
+        return super()._match_single_mail_key(kde_key, mail_key, original) or ocr_match(kde_key, mail_key, original)
 
     def _select_page_mail_matches(self, rows, allowed_filenames):
-        selected, ambiguous = super()._select_page_mail_matches(rows, allowed_filenames)
+        if not self.jobs:
+            return super()._select_page_mail_matches(rows, allowed_filenames)
+        selected = {}
+        ambiguous = {}
         self.row_jobs = {}
         for job in self.jobs:
-            matches, _ = super()._select_page_mail_matches(rows, job["lookup"])
+            account = next((account for account in self.configuration["accounts"] if account["username"] == job["account"]), None)
+            side = account_side(account, self.configuration["accounts"].index(account)) if account else None
+            candidates = [(index, row) for index, row in rows
+                          if core.account_side_from_name(row.get("filename", "")) in {None, side}
+                          and row_matches_job_date(row.get("filename", ""), row.get("file_time", ""), job)]
+            precise = {key: original for key, original in job["lookup"].items()
+                       if core.has_known_file_extension(key) or core.is_kde_reference_candidate(key)}
+            matches, conflicts = super()._select_page_mail_matches(candidates, precise or job["lookup"])
+            ambiguous.update(conflicts)
             for row_index, detail in matches.items():
-                if row_index not in selected:
-                    continue
+                selected[row_index] = detail
                 self.row_jobs.setdefault(row_index, set()).add(job["id"])
         return selected, ambiguous
+
+    def _previous_page(self, page, timeout_ms):
+        for selector in ("button[aria-label='Go to previous page']", "button[title='Go to previous page']",
+                         "button[aria-label*='previous']"):
+            button = page.locator(selector)
+            if button.count() and button.first.is_enabled():
+                button.first.click(timeout=timeout_ms)
+                self._wait_network(page)
+                page.wait_for_timeout(1500)
+                return True
+        return False
+
+    def _has_next_page(self, page):
+        for selector in ("button[aria-label='Go to next page']", "button[title='Go to next page']", "button[aria-label*='next']"):
+            button = page.locator(selector)
+            if button.count() and button.first.is_enabled():
+                return True
+        return False
+
+    def _download_visible_pages(self, page, account, timeout_ms, allowed_filenames=None):
+        if not self.jobs:
+            return super()._download_visible_pages(page, account, timeout_ms, allowed_filenames)
+        result = {"downloaded": 0, "skipped": 0, "not_requested": 0, "errors": 0}
+        catalogue = []
+        positions = {}
+        pages = 0
+        for page_number in range(self.settings.max_pages):
+            if self.stop_event.is_set():
+                return result
+            pages += 1
+            for row_index, row in self._table_rows(page):
+                identifier = len(catalogue)
+                catalogue.append((identifier, row))
+                positions[identifier] = (page_number, row_index)
+            if not self._has_next_page(page):
+                break
+            if page_number + 1 == self.settings.max_pages:
+                raise RuntimeError("Portal page limit reached before a complete match check; no files downloaded. Increase the page limit.")
+            if not self._next_page(page, timeout_ms):
+                raise RuntimeError("Portal pagination changed during matching; no files downloaded.")
+        selected, ambiguous = self._select_page_mail_matches(catalogue, allowed_filenames or {})
+        matched_jobs = {identifier: set(self.row_jobs.get(identifier, set())) for identifier in selected}
+        for key, count in ambiguous.items():
+            self.reporter.emit(4, "warning", f"Reference matches {count} different files across the portal; review required: {key}",
+                               account.label, persist=True)
+        if not selected:
+            return result
+        for _ in range(pages - 1):
+            if self.stop_event.is_set():
+                return result
+            if not self._previous_page(page, timeout_ms):
+                raise RuntimeError("Cannot return to the first portal page safely; no files downloaded.")
+        rows_by_id = dict(catalogue)
+        for page_number in range(pages):
+            if self.stop_event.is_set():
+                break
+            current_rows = self._table_rows(page)
+            for identifier, detail in selected.items():
+                if positions[identifier][0] != page_number:
+                    continue
+                expected = rows_by_id[identifier]
+                matches = [(index, row) for index, row in current_rows
+                           if row.get("filename") == expected.get("filename")
+                           and row.get("file_time", "") == expected.get("file_time", "")
+                           and row.get("size_text", "") == expected.get("size_text", "")]
+                if len(matches) != 1:
+                    raise RuntimeError("Portal list changed after matching; refusing to click a different file.")
+                row_index, row = matches[0]
+                self.row_jobs = {row_index: matched_jobs[identifier]}
+                self.reporter.emit(4, "stage_complete", "Matched email evidence, account and business date", account.label, row["filename"])
+                status = self.handle_file(page, row_index, row, account, timeout_ms)
+                result["downloaded" if status == "complete" else "skipped" if status == "skipped" else "errors"] += 1
+                if self.stop_event.wait(self.settings.download_delay_seconds):
+                    return result
+            if page_number + 1 < pages and not self._next_page(page, timeout_ms):
+                raise RuntimeError("Portal pagination changed before delivery finished.")
+        return result
+
+    def download_to_cache(self, page, row_index, timeout_ms):
+        cache = settings_home() / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        target = cache / (uuid.uuid4().hex + ".download")
+        return self._click_download_row(page, row_index, target, timeout_ms)
 
     def job_outcomes(self) -> dict[str, dict[str, str]]:
         outcomes = {}
@@ -92,15 +188,15 @@ class StructuredDownloader(core.KdeDownloader):
             required = {key for key in job["lookup"] if core.has_known_file_extension(key)}
             missing = required - self.required_matches.get(job["id"], set())
             if missing:
-                kind, reason = "missing", "ไม่พบไฟล์ที่เมลระบุ: " + ", ".join(sorted(missing))
+                kind, reason = "missing", "Requested files were not found: " + ", ".join(sorted(missing))
             elif not statuses:
-                kind, reason = "missing", "ไม่พบรายการ KDE ที่จับคู่กับอีเมลได้ หรือชื่อที่จับคู่กำกวม"
+                kind, reason = "missing", "No unique KDE file matched the email reference, account and date."
             elif "error" in statuses:
-                kind, reason = "download_failed", "ดาวน์โหลด/ตรวจไฟล์ไม่สำเร็จ ดูสาเหตุของไฟล์ใน Error"
+                kind, reason = "download_failed", "Download or verification failed; see the file's History entry."
             elif "copy_pending" in statuses:
-                kind, reason = "copy_pending", "มีต้นฉบับแล้ว แต่ปลายทางยังไม่ครบ ใช้ปุ่มลองคัดลอกที่ค้าง"
+                kind, reason = "copy_pending", "Validated source retained. Use Tools > Repair pending saves; no redownload required."
             else:
-                kind, reason = "complete", "ตรวจไฟล์ตามเมลครบทุกปลายทางที่เลือกแล้ว"
+                kind, reason = "complete", "Requested files verified at all selected destinations."
             outcomes[job["id"]] = {"kind": kind, "reason": reason}
         return outcomes
 
@@ -112,10 +208,10 @@ class StructuredDownloader(core.KdeDownloader):
             if folder.casefold() not in self.reported_mail_fallbacks:
                 self.reported_mail_fallbacks.add(folder.casefold())
                 self.reporter.emit(2, "notice",
-                                   f"Outlook ไม่รองรับตัวกรอง UnRead ใน {folder}; ตรวจสถานะเมลทีละรายการแทน (จำกัดตามจำนวนเมลที่ตั้งไว้) — {diagnostic}")
+                                   f"Outlook filter unavailable in {folder}; using bounded per-item checks. {diagnostic}")
             return
         if lower.startswith("mail watch: skip folder "):
-            self.mail_failures.append("อ่านโฟลเดอร์อีเมลไม่ได้: " + message)
+            self.mail_failures.append("Cannot read email folder: " + message)
         elif "mail watch:" in lower and any(text in lower for text in (
             "failed", "ไม่สำเร็จ", "ไม่พบ mailbox", "จึงสแกน outlook ไม่ได้",
             "เปิด outlook ไม่ได้", "เริ่ม outlook com ไม่ได้", "outlook com error",
@@ -125,20 +221,20 @@ class StructuredDownloader(core.KdeDownloader):
             if any(text in lower for text in ("error", "ไม่สำเร็จ", "ยังอยู่ที่")):
                 self.logout_failures.append(message)
         if "login attempt" in lower or "user ยังใช้งานอยู่" in lower:
-            self.reporter.emit(3, "running", message, self.account)
+            self.reporter.emit(3, "running", "KDE user is already in use." if "user ยังใช้งานอยู่" in lower else message, self.account)
         if "mail key ที่กำกวม" in message:
-            self.reporter.emit(4, "warning", message, self.account, persist=True)
+            self.reporter.emit(4, "warning", "Several KDE files match this reference; no ambiguous file was downloaded.", self.account, persist=True)
 
     def _login_with_retry(self, page: Any, account: core.Account, timeout_ms: int) -> None:
         self.stage = 3
         self.session_attempted = True
-        self.reporter.emit(3, "running", "กำลังเข้าสู่ระบบ KDE", account.label)
+        self.reporter.emit(3, "running", "Logging in to KDE", account.label)
         super()._login_with_retry(page, account, timeout_ms)
-        self.reporter.emit(3, "stage_complete", "เข้าสู่ระบบสำเร็จ", account.label)
+        self.reporter.emit(3, "stage_complete", "Login succeeded", account.label)
 
     def _open_download_page(self, page: Any, timeout_ms: int) -> None:
         self.stage = 4
-        self.reporter.emit(4, "running", "เปิดรายการไฟล์และจับคู่กับอีเมล", self.account)
+        self.reporter.emit(4, "running", "Matching portal files against email evidence", self.account)
         super()._open_download_page(page, timeout_ms)
 
     def _post_auth(self, path: str, payload=None, referer=None):
@@ -173,9 +269,17 @@ class StructuredDownloader(core.KdeDownloader):
                     Path(self.configuration["new_dir"])]
         status = self.delivery.deliver(
             account.username, core.safe_filename(row["filename"]), folders,
-            lambda target: self._click_download_row(page, row_index, target, timeout_ms),
+            lambda _target: self.download_to_cache(page, row_index, timeout_ms),
             recovery,
         )
+        key = self.delivery.history.file_lock(row["filename"])
+        with key, self.delivery.history.lock:
+            from .storage import record_key
+            identifier = record_key(account.username, row["filename"])
+            record = self.delivery.history.data["files"].get(identifier)
+            if record is not None:
+                record["mail_jobs"] = sorted(set(record.get("mail_jobs", [])) | self.row_jobs.get(row_index, set()))
+                self.delivery.history.set_file(identifier, record)
         for job_id in self.row_jobs.get(row_index, set()):
             self.job_statuses.setdefault(job_id, []).append(status)
             job = next(job for job in self.jobs if job["id"] == job_id)
@@ -190,25 +294,23 @@ class StructuredDownloader(core.KdeDownloader):
         self.stage = 3
         self.logout_failures = []
         self.session_attempted = False
-        self.reporter.emit(3, "running", "เตรียม Browser สำหรับบัญชี", self.account)
+        self.reporter.emit(3, "running", "Preparing an isolated account session", self.account)
         try:
             result = super().process_account(account)
             self.reporter.emit(4, "stage_complete",
-                               f"ตรวจครบ: ดาวน์โหลด/คัดลอก {result.get('downloaded', 0)}, "
-                               f"มีครบแล้ว {result.get('skipped', 0)}, "
-                               f"ไม่ตรงอีเมล {result.get('not_requested', 0)}, "
-                               f"ผิดพลาด {result.get('errors', 0)}", self.account)
+                               f"Saved {result.get('downloaded', 0)}, already saved {result.get('skipped', 0)}, "
+                               f"unrequested {result.get('not_requested', 0)}, failed {result.get('errors', 0)}", self.account)
             return result
         finally:
             if self.logout_failures:
-                self.reporter.emit(8, "error", "ตรวจการออกจากระบบ: " + " | ".join(self.logout_failures),
+                self.reporter.emit(8, "error", "Logout requires attention: " + " | ".join(self.logout_failures),
                                    self.account, persist=True, count=True)
             elif self.session_attempted:
                 # APIs attempted by the preserved engine; do not claim server verification.
-                self.reporter.emit(8, "stage_complete", "จบขั้นตอนปิด Session; ไม่พบข้อผิดพลาดที่ระบบรายงาน",
+                self.reporter.emit(8, "stage_complete", "Logout and session cleanup completed",
                                    self.account)
             else:
-                self.reporter.emit(8, "stage_complete", "ไม่ได้เริ่ม Session KDE จึงไม่มี Session ให้ปิด",
+                self.reporter.emit(8, "stage_complete", "No KDE session was opened",
                                    self.account)
 
 
@@ -234,7 +336,8 @@ def make_engine_settings(settings: dict[str, Any], state_file: Path) -> core.Set
 def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
               callback: Callable[[dict[str, Any]], None], scan_only: bool = False,
               check_only: bool = False, retry_only: bool = False,
-              watch: bool = False, requeue_failed: bool = False) -> dict[str, int]:
+              watch: bool = False, requeue_failed: bool = False,
+              requests: queue.Queue | None = None) -> dict[str, int]:
     # Fail before any portal/browser operation when the user has not configured the machine.
     validate_settings(settings, require_credentials=not (scan_only or check_only or retry_only))
     log_folder = Path(settings["log_dir"])
@@ -243,7 +346,7 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
         history = History(log_folder)
         reporter = Reporter(history, callback)
         reporter.secrets = [account["password"] for account in settings["accounts"] if account["password"]]
-        reporter.emit(1, "running", "ตรวจสิทธิ์ด้วย Windows user ที่ใช้งานเครื่องนี้")
+        reporter.emit(1, "running", "Checking this Windows user's environment")
         folders = list(dict.fromkeys(
             path for account in settings["accounts"] if account["enabled"]
             for path in selected_folders(settings, account)
@@ -251,9 +354,9 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
         if not scan_only:
             for folder in folders:
                 check_destination(folder)
-        reason = "ตรวจสิทธิ์เขียน Log ผ่าน"
+        reason = "Log write check passed"
         if not scan_only:
-            reason += " และเปิดอ่านปลายทางได้; ไม่สร้างไฟล์ทดสอบ สิทธิ์บันทึกตรวจตอนดาวน์โหลดจริง"
+            reason += "; destinations readable. No test files created; save access is checked during real delivery."
         reporter.emit(1, "stage_complete", reason)
         delivery = Delivery(history, reporter)
         with tempfile.TemporaryDirectory(prefix="kde-v3-") as temporary:
@@ -263,8 +366,8 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
                 browser_options = engine._browser_launch_kwargs()
                 browser = browser_options.get("executable_path", "")
                 if not browser or not Path(browser).is_file():
-                    raise FileNotFoundError("ไม่พบ Browser กรุณาติดตั้ง Chrome หรือกำหนดตำแหน่ง Browser")
-                reporter.emit(1, "stage_complete", f"Browser พร้อม: {browser}")
+                    raise FileNotFoundError("Browser not found. Restore the full portable bundle or configure Chrome/Edge.")
+                reporter.emit(1, "stage_complete", f"Browser ready: {browser}")
                 return reporter.counts
             # Pending deliveries are repaired without requiring the original mail to remain unread.
             for record in list(history.data["files"].values()):
@@ -280,18 +383,22 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
                     continue
 
                 def cannot_redownload(_target: Path) -> Path:
-                    raise FileNotFoundError("ไม่พบต้นฉบับสำหรับคัดลอก ต้องตรวจอีเมล/ดาวน์โหลดใหม่")
+                    raise FileNotFoundError("Validated source is unavailable; a new mail/download request is required.")
 
                 delivery.deliver(
                     account["username"], record["filename"], selected_folders(settings, account),
                     cannot_redownload,
                     [Path(settings["original_dir"]), Path(settings["new_dir"])],
                 )
+            queue_state = MailQueue(history, reporter, settings, today())
+            queue_state.refresh_saved_jobs()
+            if requests is not None:
+                reporter.callback({"kind": "queue", "jobs": queue_state.snapshot()})
             if retry_only or stop_event.is_set():
-                reporter.emit(8, "summary", "จบการลองคัดลอกไฟล์ที่ค้าง")
+                reporter.emit(8, "summary", "Pending-save repair finished")
                 return reporter.counts
             if scan_only:
-                reporter.emit(2, "running", "กำลังตรวจ Outlook mailbox บนเครื่องนี้")
+                reporter.emit(2, "running", "Reading the local Outlook mailbox")
                 try:
                     engine.mail_filename_lookup = engine.scan_mail_filenames()
                 except Exception as error:
@@ -301,12 +408,12 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
                     reporter.emit(2, "error", " | ".join(engine.mail_failures), persist=True, count=True)
                     return reporter.counts
                 reporter.emit(2, "stage_complete",
-                              f"พบชื่อ/ข้อความสำหรับจับคู่ {len(engine.mail_filename_lookup)} รายการ")
-                reporter.emit(8, "summary", "จบการตรวจอีเมล — ไม่เปิด Session KDE")
+                              f"Found {len(engine.mail_filename_lookup)} matching references")
+                reporter.emit(8, "summary", "Email scan finished; KDE was not opened")
                 return reporter.counts
             if requeue_failed:
-                MailQueue(history, reporter, settings).requeue_failed(time.time())
-            run_mail_monitor(settings, stop_event, reporter, history, Path(temporary), watch)
+                MailQueue(history, reporter, settings, today()).requeue_failed(time.time())
+            run_mail_monitor(settings, stop_event, reporter, history, Path(temporary), watch, requests)
         history.save()
         return reporter.counts
 
@@ -320,23 +427,23 @@ def run_account_batch(settings: dict[str, Any], jobs: list[dict[str, Any]],
     engine.jobs = jobs
     engine.mail_filename_lookup = {key: original for job in jobs for key, original in job["lookup"].items()}
     account = next(account for account in engine_settings.accounts if account.username == jobs[0]["account"])
-    reporter.emit(3, "running", f"เปิด Session แยกสำหรับเมล {len(jobs)} รายการ; ครั้งสูงสุดในชุด {max(job['attempts'] for job in jobs)}/2", account.label)
+    reporter.emit(3, "running", f"Opening an isolated session; attempt {max(job['attempts'] for job in jobs)}/2", account.label)
     try:
         engine.process_account(account)
         if engine.logout_failures:
-            raise RuntimeError("ออกจากระบบไม่สำเร็จ: " + " | ".join(engine.logout_failures))
+            raise RuntimeError("Logout failed: " + " | ".join(engine.logout_failures))
         return engine.job_outcomes()
     except Exception as error:
         kind = "login_failed" if engine.stage == 3 or engine.logout_failures else "download_failed"
-        reason = f"ขั้นตอน {engine.stage}: {type(error).__name__}: {error}"
+        reason = f"{STEPS[engine.stage]}: {type(error).__name__}: {error}"
         reporter.emit(engine.stage, "error", reason, account.label, persist=True, count=True)
         return {job["id"]: {"kind": kind, "reason": reason} for job in jobs}
 
 
 def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
                      reporter: Reporter, history: History, temporary: Path,
-                     watch: bool) -> None:
-    mail_queue = MailQueue(history, reporter, settings)
+                     watch: bool, requests: queue.Queue | None = None) -> None:
+    mail_queue = MailQueue(history, reporter, settings, today())
     mail_queue.recover_interrupted(time.time())
     scanner = StructuredDownloader(make_engine_settings(settings, temporary / "mail-scan.json"),
                                    reporter, Delivery(history, reporter), settings, stop_event)
@@ -344,13 +451,31 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
     next_scan = 0.0
     scanned_once = False
     last_summary = ""
+    last_snapshot = ""
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="KDE-account") as executor:
         while not stop_event.is_set():
             now = time.time()
+            mail_queue.today = today()
             for account, future in list(active.items()):
                 if future.done():
                     mail_queue.finish(future.result(), time.time(), stop_event.is_set())
                     del active[account]
+            if requests is not None:
+                for _ in range(20):
+                    try:
+                        request = requests.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        if request["kind"] == "image":
+                            message = scanner.evidence_reader.screenshot(Path(request["path"]), request["side"])
+                            mail_queue.ingest([message], time.time())
+                        elif request["kind"] == "review":
+                            mail_queue.resolve(request["id"], request["account"], request["reference"], time.time())
+                        elif request["kind"] == "retry":
+                            mail_queue.requeue_failed(time.time())
+                    except Exception as error:
+                        reporter.emit(2, "error", f"Request failed: {type(error).__name__}: {error}", persist=True)
             if now >= next_scan and (watch or not scanned_once):
                 scanner.mail_messages = []
                 scanner.mail_failures = []
@@ -363,7 +488,7 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
                         previous_scan = history.data["outcomes"].get("stage::2", {})
                         if previous_scan.get("signature", [None, None])[1] in {"error", "warning"}:
                             reporter.emit(2, "stage_complete",
-                                          f"อ่าน Outlook สำเร็จแล้ว — พบเมลที่ตรงกฎ {len(scanner.mail_messages)} รายการ")
+                                          f"Outlook recovered; found {len(scanner.mail_messages)} relevant messages")
                 except Exception as error:
                     reporter.emit(2, "error", f"Outlook: {type(error).__name__}: {error}", persist=True)
                     if not watch:
@@ -372,14 +497,19 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
                 next_scan = time.time() + settings["mail_poll_seconds"]
             for account, jobs in mail_queue.claim_ready(time.time(), set(active)).items():
                 if stop_event.is_set():
-                    mail_queue.finish({job["id"]: {"kind": "missing", "reason": "หยุดก่อนเปิด Session"} for job in jobs}, time.time(), True)
+                    mail_queue.finish({job["id"]: {"kind": "missing", "reason": "Stopped before opening a session"} for job in jobs}, time.time(), True)
                     continue
                 active[account] = executor.submit(run_account_batch, settings, jobs, stop_event,
                                                   reporter, history, temporary)
+            snapshot = mail_queue.snapshot()
+            signature = repr(snapshot)
+            if signature != last_snapshot and requests is not None:
+                reporter.callback({"kind": "queue", "jobs": snapshot})
+                last_snapshot = signature
             with history.lock:
                 enabled = {account["username"] for account in settings["accounts"] if account["enabled"]}
                 waiting = sum(job["status"] == "waiting" and job["account"] in enabled for job in mail_queue.jobs.values())
-            summary = f"เฝ้ารออีเมล | คิวรอ {waiting} | บัญชีกำลังทำงาน {len(active)}/2 | ไม่มีเมลใหม่จะไม่ Login KDE"
+            summary = f"Monitoring today's mail · Queued {waiting} · Active accounts {len(active)}/2"
             if summary != last_summary:
                 reporter.emit(2, "summary", summary)
                 last_summary = summary
@@ -389,4 +519,4 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
         # Logout finishes in each worker before the monitor releases the shared lock.
         for future in active.values():
             mail_queue.finish(future.result(), time.time(), stop_event.is_set())
-    reporter.emit(8, "summary", "หยุดเฝ้าอีเมลและปิด Session แล้ว" if stop_event.is_set() else "จบคิวอีเมลที่ตรวจพบ")
+    reporter.emit(8, "summary", "Paused; account sessions closed" if stop_event.is_set() else "Email queue finished")

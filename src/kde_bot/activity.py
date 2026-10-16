@@ -59,7 +59,7 @@ def read_activity(folder: Path) -> tuple[list[dict[str, Any]], list[dict[str, An
     activity = ActivityHistory()
     latest: OrderedDict[str, dict[str, Any]] = OrderedDict()
     if not folder.is_dir():
-        raise FileNotFoundError(f"ไม่พบโฟลเดอร์ Log หรือไม่มีสิทธิ์เข้าถึง: {folder}")
+        raise FileNotFoundError(f"Log folder is missing or inaccessible: {folder}")
     for path in sorted(folder.glob("KDE_Log_*.csv"))[-3:]:
         with path.open(encoding="utf-8-sig", newline="") as stream:
             for row in csv.DictReader(stream):

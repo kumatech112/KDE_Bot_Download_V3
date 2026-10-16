@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .legacy_core import canonical_file_identity
-from .settings import atomic_json
+from .settings import atomic_json, settings_home
 
 
 def timestamp() -> str:
@@ -56,7 +56,7 @@ class WorkerLock:
         except OSError as error:
             self.stream.close()
             self.stream = None
-            raise RuntimeError("มีเครื่องอื่นกำลังทำงาน KDE หรือไม่สามารถล็อกโฟลเดอร์ Log ได้") from error
+            raise RuntimeError("Another KDE monitor is active, or the Log folder cannot be locked.") from error
         return self
 
     def __exit__(self, *_):
@@ -73,18 +73,18 @@ class WorkerLock:
 def check_destination(folder: Path) -> None:
     """Check a business destination without creating, changing or deleting files."""
     if not folder.is_dir():
-        raise FileNotFoundError(f"ไม่พบโฟลเดอร์ปลายทางหรือไม่มีสิทธิ์เข้าถึง: {folder}")
+        raise FileNotFoundError(f"Destination folder is missing or inaccessible: {folder}")
     try:
         with os.scandir(folder) as entries:
             next(entries, None)
     except PermissionError as error:
-        raise PermissionError(f"ไม่มีสิทธิ์อ่านรายการไฟล์ในปลายทาง: {folder}") from error
+        raise PermissionError(f"Cannot read the destination directory: {folder}") from error
 
 
 def check_writable(folder: Path) -> None:
     """Probe the mutable Log folder only; never use on business destinations."""
     if not folder.is_dir():
-        raise FileNotFoundError(f"ไม่พบโฟลเดอร์หรือไม่มีสิทธิ์เข้าถึง: {folder}")
+        raise FileNotFoundError(f"Folder is missing or inaccessible: {folder}")
     probe = folder / f".kde-check-{uuid.uuid4().hex}.tmp"
     try:
         with probe.open("xb") as stream:
@@ -96,27 +96,68 @@ def check_writable(folder: Path) -> None:
 
 
 def verified_copy(source: Path, target: Path, expected_hash: str) -> None:
-    """Never replace an existing business file, including mismatched files."""
+    """Publish only the final filename; exclusive creation never overwrites a file."""
     if target.exists():
         if target.is_file() and target.stat().st_size > 0 and file_hash(target) == expected_hash:
             return
-        raise FileExistsError(f"ไฟล์ปลายทางมีอยู่แต่เนื้อหาไม่ตรงกัน ต้องตรวจสอบ: {target}")
-    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
-    published = False
+        raise FileExistsError(f"Existing destination has different content; file preserved: {target}")
+    created = False
     try:
-        with source.open("rb") as incoming, temporary.open("xb") as outgoing:
+        with source.open("rb") as incoming, open_new_target(target) as outgoing:
+            created = True
             for block in iter(lambda: incoming.read(1024 * 1024), b""):
                 outgoing.write(block)
             outgoing.flush()
             os.fsync(outgoing.fileno())
-        if file_hash(temporary) != expected_hash:
-            raise OSError("ตรวจ SHA-256 ของสำเนาไม่ผ่าน")
-        # Windows rename fails if a competing process created the destination.
-        os.rename(temporary, target)
-        published = True
-    finally:
-        if not published:
-            temporary.unlink(missing_ok=True)
+            outgoing.seek(0)
+            digest = hashlib.sha256()
+            for block in iter(lambda: outgoing.read(1024 * 1024), b""):
+                digest.update(block)
+            if digest.hexdigest() != expected_hash:
+                raise OSError("Destination SHA-256 verification failed.")
+    except Exception:
+        if created:
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                # Retain the validated local source and failed destination in shared state.
+                # Never hide the actual write failure behind a cleanup access denial.
+                pass
+        raise
+
+
+def open_new_target(target: Path):
+    """Keep Windows readers locked out until the final file is fully verified."""
+    if os.name != "nt":
+        return target.open("x+b")
+    import msvcrt
+    import win32con
+    import win32file
+    try:
+        handle = win32file.CreateFile(str(target), win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                                     0, None, win32con.CREATE_NEW, win32con.FILE_ATTRIBUTE_NORMAL, None)
+    except Exception as error:
+        code = getattr(error, "winerror", error.args[0] if error.args else None)
+        if code in {80, 183}:
+            raise FileExistsError(f"Destination appeared during delivery; no overwrite: {target}") from error
+        if code == 5:
+            raise PermissionError(f"Cannot save downloaded file: {target}") from error
+        raise
+    descriptor = msvcrt.open_osfhandle(handle.Detach(), os.O_RDWR | os.O_BINARY)
+    return os.fdopen(descriptor, "r+b")
+
+
+def cached_source(record: dict[str, Any]) -> Path | None:
+    hint = record.get("source_hint", "")
+    if not hint:
+        return None
+    path = Path(hint)
+    cache = settings_home() / "cache"
+    if path.parent.resolve() != cache.resolve() or path.suffix != ".download":
+        return None
+    if path.is_file() and path.stat().st_size > 0 and file_hash(path) == record.get("sha256"):
+        return path
+    return None
 
 
 class History:
@@ -129,24 +170,24 @@ class History:
         if self.path.exists():
             loaded = json.loads(self.path.read_text(encoding="utf-8-sig"))
             if loaded.get("version") != 3 or not isinstance(loaded.get("files"), dict):
-                raise ValueError("ประวัติ KDE ไม่ถูกต้อง กรุณาตรวจ KDE_State.json ก่อนเริ่ม")
+                raise ValueError("Invalid KDE history. Check KDE_State.json before starting.")
             self.data = loaded
             self.data.setdefault("outcomes", {})
         self.data.setdefault("mail_jobs", {})
         if not isinstance(self.data["outcomes"], dict) or not isinstance(self.data["mail_jobs"], dict):
-            raise ValueError("ประวัติผลลัพธ์/คิวอีเมลไม่ถูกต้อง กรุณาตรวจ KDE_State.json")
+            raise ValueError("Invalid outcome or queue history. Check KDE_State.json.")
         for key, job in self.data["mail_jobs"].items():
             if (not isinstance(job, dict) or job.get("id") != key
-                    or job.get("status") not in {"waiting", "running", "complete", "copy_pending", "exhausted"}
+                    or job.get("status") not in {"waiting", "running", "complete", "copy_pending", "exhausted", "review", "expired"}
                     or not isinstance(job.get("lookup"), dict)
                     or not all(isinstance(value, str) for pair in job.get("lookup", {}).items() for value in pair)
                     or not isinstance(job.get("attempts"), int) or not 0 <= job["attempts"] <= 2
                     or not isinstance(job.get("due"), (int, float)) or not math.isfinite(job["due"])
                     or not all(isinstance(job.get(field), str) for field in ("account", "label", "mail_id"))):
-                raise ValueError("คิวอีเมลเสียหาย: เก็บไฟล์เดิมไว้และหยุดก่อนเปิด KDE")
+                raise ValueError("Invalid email queue: original state preserved; KDE was not opened.")
         cooldowns = self.data.get("account_cooldowns", {})
         if not isinstance(cooldowns, dict) or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in cooldowns.values()):
-            raise ValueError("ข้อมูลเวลารอ Login เสียหาย กรุณาตรวจ KDE_State.json")
+            raise ValueError("Invalid login cooldown data. Check KDE_State.json.")
 
     def save(self) -> None:
         with self.lock:
@@ -181,7 +222,7 @@ class History:
                             "destinations": {},
                         }))
         else:
-            raise ValueError("ไฟล์นี้ไม่ใช่ประวัติดาวน์โหลด KDE")
+            raise ValueError("This is not a KDE download-history file.")
         count = 0
         for key, value in records:
             if key not in self.data["files"]:
@@ -305,7 +346,7 @@ class Delivery:
         exact = folder / filename
         if exact.exists():
             if not exact.is_file() or exact.stat().st_size == 0:
-                raise FileExistsError(f"ไฟล์เดิมไม่สมบูรณ์ กรุณาตรวจสอบ: {exact}")
+                raise FileExistsError(f"Existing file is incomplete and was preserved: {exact}")
             return exact
         candidates = self.index(folder).get(canonical_file_identity(filename), [])
         valid = [path for path in candidates if path.exists() and path.stat().st_size > 0]
@@ -315,7 +356,7 @@ class Delivery:
             candidates = self.index(folder, refresh=True).get(canonical_file_identity(filename), [])
             valid = [path for path in candidates if path.exists() and path.stat().st_size > 0]
         if len(valid) > 1:
-            raise FileExistsError(f"พบไฟล์ชื่อเทียบเท่าหลายไฟล์ ต้องตรวจสอบ: {filename}")
+            raise FileExistsError(f"Several equivalent filenames require review: {filename}")
         return valid[0] if valid else None
 
     def deliver(self, account: str, filename: str, folders: list[Path],
@@ -333,10 +374,13 @@ class Delivery:
         source: Path | None = None
         downloaded = False
         try:
-            self.reporter.emit(5, "running", "ตรวจประวัติและไฟล์ในปลายทาง", account, filename)
+            self.reporter.emit(5, "running", "Checking existing files and history", account, filename)
             locations = [(folder, self.existing(folder, filename)) for folder in folders]
             available = [path for _, path in locations if path is not None]
-            if available:
+            local_source = cached_source(record)
+            if local_source:
+                source = local_source
+            elif available:
                 source = available[0]
             else:
                 for folder in recovery_folders or []:
@@ -346,41 +390,52 @@ class Delivery:
                             break
             if source is None:
                 stage = 6
-                self.reporter.emit(6, "running", "กำลังดาวน์โหลดจาก KDE", account, filename, str(folders[0]))
+                self.reporter.emit(6, "running", "Downloading from KDE to local staging", account, filename, str(folders[0]))
                 source = download(folders[0] / filename)
                 downloaded = True
                 if not source.is_file() or source.stat().st_size == 0:
-                    raise OSError("ไฟล์ดาวน์โหลดว่างหรือไม่พบไฟล์")
+                    raise OSError("Downloaded file is empty or missing.")
             digest = file_hash(source)
             if record.get("sha256") and record["sha256"] != digest:
-                raise FileExistsError("เนื้อหาไฟล์ไม่ตรงกับประวัติเดิม ต้องตรวจสอบก่อนคัดลอก")
-            record.update(account=account, filename=source.name, sha256=digest,
-                          size=source.stat().st_size, destinations={}, pending=[])
+                raise FileExistsError("Content differs from recorded SHA-256; existing files preserved.")
+            record.update(account=account, filename=filename, sha256=digest,
+                          size=source.stat().st_size, destinations={}, pending=list(map(str, folders)))
+            if source.parent.resolve() == (settings_home() / "cache").resolve():
+                record["source_hint"] = str(source)
             if downloaded:
                 record["downloaded_at"] = timestamp()
             self.history.set_file(key, record)
             copied = False
             for folder, existing in locations:
                 stage = 7
-                target = existing or folder / source.name
+                target = existing or folder / filename
                 if target == source:
                     record["destinations"][str(folder)] = str(source)
                 else:
-                    self.reporter.emit(7, "running", "ตรวจสอบหรือคัดลอกไฟล์ปลายทาง", account, filename, str(target))
+                    self.reporter.emit(7, "running", "Saving and verifying the final destination file", account, filename, str(target))
                     was_missing = existing is None
                     verified_copy(source, target, digest)
                     record["destinations"][str(folder)] = str(target)
                     copied = copied or was_missing
                 self.history.set_file(key, record)
-                identity = canonical_file_identity(source.name)
+                identity = canonical_file_identity(filename)
                 with self.index_lock:
                     index = self.index(folder)
                     if target not in index.setdefault(identity, []):
                         index[identity].append(target)
+                record["pending"] = [folder_path for folder_path in record["pending"] if folder_path != str(folder)]
+                self.history.set_file(key, record)
             status = "complete" if downloaded or copied else "skipped"
-            reason = "ดาวน์โหลดและตรวจไฟล์ครบทุกปลายทางที่เลือก" if status == "complete" else "ตรวจ SHA-256 แล้ว พบไฟล์ครบทุกปลายทางที่เลือก"
+            reason = "Saved and verified at all selected destinations" if status == "complete" else "Already saved; SHA-256 verified at all destinations"
             self.reporter.emit(7 if len(folders) > 1 or copied else 6, status, reason,
                                account, filename, " | ".join(map(str, folders)), True, digest, True)
+            if cached_source(record) == source:
+                try:
+                    source.unlink(missing_ok=True)
+                    record.pop("source_hint", None)
+                    self.history.set_file(key, record)
+                except OSError:
+                    pass
             return status
         except Exception as error:
             status = "copy_pending" if source is not None and stage == 7 else "error"

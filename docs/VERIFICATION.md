@@ -1,73 +1,47 @@
-# Verification — 2026-10-10 — 3.1.4
+# Verification — 2026-10-16 — 3.2.0
 
-## Completed checks
+## Source checks completed
 
-- 94 regression tests and 4 subtests passed after the implementation changes.
-- Diagnostic and copy-only preflight passed with all business-destination file writes rejected, across all three storage modes; no test files were created and existing files retained their contents.
-- Missing/unreadable destinations still failed explicitly without creating directories or files.
-- Actual download PermissionError remained a step-six error without modifying existing business files.
-- Old V3 account-folder overrides are dropped on load/import/save while global roots, credentials and enabled-account choices survive.
-- Legacy combined configuration imports only KDE and does not restore the former account download folders.
-- Both accounts select identical roots in all three storage modes, even when raw legacy overrides are supplied.
-- Two concurrent accounts publish verified files directly at both roots without account subdirectories.
-- Pending-copy repair uses the shared roots without a portal download or recreation of deleted account folders.
-- Reproduced the screenshot's invalid UnRead filter on a Notes folder using fake Outlook COM.
-- All seven known non-mail folder types skipped item filtering while their mail children remained readable.
-- Rejected mail-folder filters fell back to per-item read checks without adding false scan errors or changing unread flags.
-- Mixed non-mail items and read messages stayed out of the queue; the configured item cap remained enforced.
-- A genuine mailbox access failure still produced a scan error.
-- Successful no-mail monitoring cleared an earlier Outlook error without any portal call.
-- Error → fresh login retry → success remained separate chronological events after CSV reload.
-- Repeated history reloads deduplicated saved/live events, including Excel-safe filenames.
-- Bounded history retained recent events from both accounts in chronological order.
-- Repeated unchanged idle summaries/errors did not flood monthly CSV.
-- Progress logging retained credential redaction and did not replace authoritative outcomes.
-- Successful login recovery cleared latest errors while retaining the historical failure.
-- Directory-cache miss recovery detected another worker's equivalent filename even with deliberately delayed directory timestamps.
-- No-mail monitoring opened no KDE session, despite repeated local mailbox checks.
-- Each newly observed message waited 180 seconds; rediscovery did not extend its deadline.
-- Pre/Post workers overlapped, with a maximum of one active batch per account.
-- Missing/download failures used exactly two total attempts; login failures waited 300 seconds.
-- Login cooldown also blocked newly arriving mail for the same account.
-- Completion, interrupted attempts and cooldowns survived shared-state reload.
-- Exhausted mail stayed stopped until an explicit manual retry; accumulated attempts were retained.
-- Duplicate filenames from different Outlook messages retained distinct message IDs. Mail unread flags were unchanged.
-- Mail specifying several filenames was not marked complete when one required file was missing.
-- Login/search/download exceptions completed UI logout, signOut, autoSignOut and browser/context close before another session.
-- Concurrent distinct-file delivery retained both history records and verified both destinations.
-- Equivalent filenames serialized publication and avoided a second download.
-- Directory indexes refreshed after another worker published an equivalent filename.
-- Overlapping Playwright runtimes restored the subprocess factory after the last worker closed.
-- Preserved date/account matching, ambiguity protection, split-volume, DPAPI, conflict and copy-recovery regressions passed.
-- Corrupt shared mail state failed without resetting its original file.
-- Actual packaged EXE passed its offline self-check, including two concurrent real browser processes with isolated cookies.
-- Actual packaged preflight passed with destination file writes rejected; no probe files were created, existing file contents were unchanged, and Log remained writable.
-- Actual packaged flat-storage check delivered both account files at both roots, verified their bytes, and confirmed no account subdirectories in all three modes.
-- Actual packaged scanner passed the Notes-folder and rejected-filter reproduction using fake COM, including child traversal and unchanged unread flags.
-- Actual packaged Thai GUI passed and was visually checked: chronological work history, mail queue, accessible Settings and no theme selector.
-- Settings displays the combined-storage explanation and contains no account-specific folder inputs.
-- Packaged GUI history search and readable Thai event details passed; the fixed step checklist is absent.
-- Packaged reports include the executable hash, linking checks to this specific bundle.
-- Recovered login failures clear from live results and saved outcome history; counters represent current rows rather than cumulative failed attempts.
+- Compile validation passed for src, tools and tests.
+- **119 tests and 4 subtests passed** after the implementation changes.
+- Actual local Tesseract recognized a generated filename screenshot; confidence was above the configured acceptance threshold and content caching prevented a second OCR call.
+- Attachment/CID and base64 inline image paths were exercised with local fixtures. Remote image URLs/scripts were not executed or fetched.
+- Today's read and unread messages were included; previous/future days and outgoing/system folders were excluded without changing read flags.
+- Two-minute initial timing, processed-ID deduplication, two total attempts, fresh-session retry, five-minute busy/login cooldown and restart budgets passed.
+- Per-account FIFO prevented overtaking, allowed the other account to work, held pending saves, and expired old-day work without an invisible queue block.
+- Newest-first Outlook results were queued in received order. Duplicate-filename emails retained separate IDs.
+- Unknown/conflicting account evidence became review jobs. Explicit confirmation retained deduplication and side guards.
+- OCR character tolerance did not accept another business number or the other account side.
+- Account/day matching, precise-reference precedence, cross-page ambiguity rejection, truncated page limits and changed rows were verified.
+- Existing matching guards for extension variants, split volumes, dates, equal-score ambiguity and equivalent filenames remained covered.
+- Actual Windows exclusive final-file creation held readers out until publication, refused competing existing files, and created no destination sidecars.
+- Validated local sources survived save failure and repaired final filenames without another portal download; completed cache sources were removed.
+- Destination diagnostics remained read-only, including with all synthetic destination writes rejected. Missing/unreadable folders remained failures.
+- DPAPI, compact state/CSV, corrupt-state preservation, history search/replay, redaction, account concurrency and session/logout cleanup regressions remained covered.
+- Source self-check passed with actual local OCR and actual offline browser pagination. Full-catalogue ambiguity and precise-reference selection were exercised against local HTML.
+- Source GUI rendered and was visually checked: three English tabs, concise controls, accessible account settings, no theme selector, countdown, search/details and isolated automatic-start trigger.
 
-## Executable
+## Portable release
 
-portable/KDE Bot Download V3.exe
+- Portable build completed with the headless browser and local English/Thai OCR engine under _internal.
+- The actual packaged EXE passed all eleven offline checks, including native browser pagination, OCR recognition, two concurrent browsers, durable queue timing/cooldowns, copy repair and final-name-only publication.
+- The actual packaged GUI passed and was visually inspected: three English tabs, four sample queue states, 120-second delay, read-mail policy, automatic-start trigger, history search and readable details.
+- Reports are linked to the tested EXE by SHA-256. No real mailbox or KDE portal was contacted.
 
-SHA-256: d3316e1d506953a1199b846765024384ed4c82bc06a5724d031a1c13d7580637
+Verified EXE SHA-256: `fabf6676480cc880e497e3d72485758f80dac772e14f690a5fc349126b35e991`
 
-Only EXE, _internal and the Thai manual are distributed. Raw reports/screenshots stay under docs/verification and are excluded from Git.
+Verified release folder: `portable-20261016-101235`.
 
-The previous project portable is removed after verification. Local Windows settings, shared business files/history and other projects are retained.
-Build tools now require at least 1 GiB free and support KDE_BUILD_HOME for a local builder with adequate space. This release was built on D:.
+The old `portable` EXE was still open when replacement was checked. Windows refused an exclusive open, so the running old bundle is preserved until its window is closed. The tested replacement is usable from the verified release folder; it must not monitor the same shared Log concurrently with the old app. Only EXE, _internal and Quick start.md are distributed.
 
 ## Deployment boundary
 
-Tests ran on 10.0.0.73, opening the executable stored on 10.0.0.97.
-Execution under the Windows user on 10.0.0.97, that user's share permissions/Outlook profile, and live KDE login/download/logout remain unverified.
-The user's screenshot identifies the failing Notes-folder condition on .97. Regression and packaged Outlook-filter checks use fake COM folders, not that machine's live mailbox.
-The user's later screenshot and report identify Permission denied involving a .kde-check probe at the .243 destination root. The generic error does not establish whether creation, writing or cleanup was denied on .97. Version 3.1.4 removes that probe from business destinations. Actual file delivery still requires the necessary Windows/SMB access and is not verified on .97. Deleted 01 Pre/02 Post directories are not recreated, existing business files are not relocated, and old probe leftovers are not removed automatically.
-No live production download, credential deployment, business-file overwrite or modification of another application was performed.
+Checks execute on **10.0.0.73**, accessing the project on **10.0.0.97**. They do not prove the Windows user's Outlook profile, share access or live KDE selectors/login/download/logout on .97.
 
-The monitor polls Outlook locally every 15 seconds; it is not a server webhook. Portal sessions only start for eligible queued mail. First observation includes previously unprocessed unread messages.
-All machines must use the same shared Log directory. One monitor owns its lock and runs up to two account workers within that owner.
+No real mailbox content, credentials, business image or production download was used in verification. No production business files were moved, deleted or overwritten. No Windows/SMB permission changes or unrelated application changes were made.
+
+OCR validation uses generated representative text images, not the user's real email screenshots. Local English/Thai recognition is provided, with documented image limits and review behavior; exact extraction from every real image is not guaranteed. External image URLs are not fetched automatically.
+
+The portal catalogue check verifies the pagination logic against local HTML. Missing/changed actual portal controls fail safely and require deployment validation. The app remains local Outlook polling (15 seconds by default), not an email server webhook or a cloud AI service.
+
+Final-filename-only publication uses a reader lock and durable local source/hash rather than destination rename sidecars. A crash can leave an incomplete final filename that is preserved and reported, never silently overwritten. Shared Log must permit normal updates; actual final-file access is still required.

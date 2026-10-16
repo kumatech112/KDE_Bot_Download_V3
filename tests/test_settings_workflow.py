@@ -57,7 +57,7 @@ def test_missing_credentials_never_start_browser(tmp_path):
     settings = default_settings()
     settings["log_dir"] = str(tmp_path)
     with patch("kde_bot.workflow.StructuredDownloader") as engine:
-        with pytest.raises(ValueError, match="รหัสผ่าน"):
+        with pytest.raises(ValueError, match="username and password"):
             run_cycle(settings, threading.Event(), lambda _: None)
         engine.assert_not_called()
 
@@ -178,4 +178,4 @@ def test_destination_preflight_never_opens_test_files_for_writing(tmp_path, monk
     for folder in destinations:
         assert {path.name for path in folder.iterdir()} == {"business-file.gpg"}
         assert (folder / "business-file.gpg").read_bytes() == b"preserve existing download"
-    assert any("สิทธิ์บันทึกตรวจตอนดาวน์โหลดจริง" in event["reason"] for event in events)
+    assert any("save access is checked during real delivery" in event["reason"] for event in events)

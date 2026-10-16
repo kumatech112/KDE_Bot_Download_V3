@@ -33,7 +33,7 @@ def default_settings() -> dict[str, Any]:
         "max_pages": 50,
         "download_delay_seconds": 5,
         "mail_poll_seconds": 15,
-        "mail_delay_seconds": 180,
+        "mail_delay_seconds": 120,
         "login_retry_seconds": 300,
         "max_session_attempts": 2,
         "page_timeout_seconds": 60,
@@ -43,8 +43,8 @@ def default_settings() -> dict[str, Any]:
         ],
         "mail_watch": {
             "enabled": True,
-            "today_only": False,
-            "unread_only": True,
+            "today_only": True,
+            "unread_only": False,
             "include_subject": True,
             "include_body": True,
             "max_messages_per_folder": 500,
@@ -78,7 +78,7 @@ def decrypt_credentials(value: Any, notices: list[str], location: str = "") -> A
                 base64.b64decode(value["$dpapi"]), None, None, None, 0
             )[1].decode("utf-8")
         except Exception:
-            notices.append(f"{location}: ต้องกรอกรหัสผ่านใหม่สำหรับ Windows user เครื่องนี้")
+            notices.append(f"{location}: Re-enter the password for this Windows user.")
             return ""
     if isinstance(value, dict):
         return {
@@ -114,17 +114,18 @@ def normalize_settings(raw: dict[str, Any]) -> dict[str, Any]:
         key: value for key, value in raw.get("mail_watch", {}).items()
         if key in result["mail_watch"]
     })
-    result["mail_watch"]["unread_only"] = True
+    result["mail_watch"]["unread_only"] = False
+    result["mail_watch"]["today_only"] = True
     result["mail_watch"]["include_subject"] = True
     # Mail is mandatory in this release; old timers never start portal sessions.
     result["mail_watch"]["enabled"] = True
-    result["mail_delay_seconds"] = 180
+    result["mail_delay_seconds"] = 120
     result["login_retry_seconds"] = 300
     result["max_session_attempts"] = 2
     result["version"] = 3
     if "accounts" in raw:
         if not isinstance(raw["accounts"], list) or len(raw["accounts"]) > 2:
-            raise ValueError("รองรับบัญชี KDE Pre/Post ไม่เกิน 2 บัญชี")
+            raise ValueError("Configure at most two KDE accounts: Pre and Post.")
         accounts = []
         for index, item in enumerate(raw["accounts"]):
             account = copy.deepcopy(result["accounts"][index])
@@ -138,12 +139,12 @@ def load_settings(path: Path | None = None) -> tuple[dict[str, Any], list[str]]:
     path = path or settings_home() / "settings.json"
     notices: list[str] = []
     if not path.exists():
-        return default_settings(), ["เครื่องนี้ยังไม่มีการตั้งค่า กรุณากรอกบัญชีในแท็บตั้งค่า"]
+        return default_settings(), ["Enter your account credentials in Settings."]
     try:
         raw = json.loads(path.read_text(encoding="utf-8-sig"))
         return normalize_settings(decrypt_credentials(raw, notices)), notices
     except Exception as error:
-        return default_settings(), [f"อ่านการตั้งค่าไม่ได้: {type(error).__name__} กรุณาตรวจไฟล์ตั้งค่า"]
+        return default_settings(), [f"Cannot read settings: {type(error).__name__}. Check the local settings file."]
 
 
 def save_settings(settings: dict[str, Any], path: Path | None = None) -> None:
@@ -167,45 +168,50 @@ def import_settings(path: Path) -> tuple[dict[str, Any], list[str]]:
     ):
         return normalize_settings(raw), notices
     result = normalize_settings(raw)
-    notices.append("นำเข้าบัญชีและกฎจับคู่แล้ว Pre/Post เก็บไฟล์รวมในปลายทางที่เลือก ไม่ใช้โฟลเดอร์แยกบัญชีเดิม กรุณาตรวจค่าก่อนบันทึก")
+    notices.append("KDE settings imported. Both accounts use the shared destination roots. Check before saving.")
     return result, notices
 
 
 def validate_settings(settings: dict[str, Any], require_credentials: bool = True) -> None:
     if settings["storage_mode"] not in {"both", "original", "new"}:
-        raise ValueError("กรุณาเลือกวิธีเก็บไฟล์")
+        raise ValueError("Choose a storage mode.")
     for key in ("page_timeout_seconds", "max_pages", "search_days"):
         if not isinstance(settings[key], int) or settings[key] < 1:
-            raise ValueError(f"{key}: ต้องเป็นจำนวนเต็มมากกว่า 0")
+            raise ValueError(f"{key}: enter a positive whole number.")
     for key in ("download_delay_seconds",):
         if not isinstance(settings[key], int) or settings[key] < 0:
-            raise ValueError(f"{key}: ต้องเป็นจำนวนเต็มตั้งแต่ 0")
+            raise ValueError(f"{key}: enter a whole number of zero or greater.")
     for key in ("log_dir", "original_dir", "new_dir"):
         if not str(settings[key]).strip() or not Path(settings[key]).is_absolute():
-            raise ValueError(f"{key}: กรุณาระบุโฟลเดอร์เต็ม")
+            raise ValueError(f"{key}: enter an absolute folder path.")
+    for key in ("original_dir", "new_dir"):
+        if Path(settings["log_dir"]).is_relative_to(Path(settings[key])):
+            raise ValueError("Choose a separate Log folder outside the download destinations.")
     enabled = [account for account in settings["accounts"] if account["enabled"]]
     if require_credentials and not enabled:
-        raise ValueError("กรุณาเปิดใช้งานบัญชี KDE อย่างน้อย 1 บัญชี")
+        raise ValueError("Enable at least one KDE account.")
     seen = set()
     for account in enabled:
         username = str(account["username"]).strip()
         if require_credentials and (not username or not account["password"]):
-            raise ValueError(f"{account['label']}: กรุณากรอกชื่อผู้ใช้และรหัสผ่าน KDE ของเครื่องนี้")
+            raise ValueError(f"{account['label']}: enter the KDE username and password for this machine.")
         if username and username.casefold() in seen:
-            raise ValueError("บัญชี Pre/Post ต้องไม่ใช้ชื่อผู้ใช้ซ้ำกัน")
+            raise ValueError("Pre and Post must have different usernames.")
         seen.add(username.casefold())
     for key in ("portal_url", "host_url", "auth_api_url"):
         if not str(settings[key]).startswith("https://"):
-            raise ValueError(f"{key}: ต้องใช้ HTTPS")
+            raise ValueError(f"{key}: HTTPS is required.")
     mail = settings["mail_watch"]
     if not mail["enabled"]:
-        raise ValueError("เวอร์ชันนี้ต้องใช้อีเมลเป็นตัวเริ่มงาน KDE")
-    if settings["mail_delay_seconds"] != 180 or settings["login_retry_seconds"] != 300 or settings["max_session_attempts"] != 2:
-        raise ValueError("นโยบาย: หน่วงเมล 180 วินาที รอ Login 300 วินาที และไม่เกิน 2 ครั้งรวมครั้งแรก")
+        raise ValueError("Email-triggered monitoring must remain enabled.")
+    if settings["mail_delay_seconds"] != 120 or settings["login_retry_seconds"] != 300 or settings["max_session_attempts"] != 2:
+        raise ValueError("Policy: wait 120 seconds after mail, 300 seconds after login failure, and allow two attempts total.")
+    if not mail["today_only"] or mail["unread_only"]:
+        raise ValueError("Monitor today's mail, including read messages; processed message IDs prevent duplicates.")
     if not isinstance(settings["mail_poll_seconds"], int) or settings["mail_poll_seconds"] < 5:
-        raise ValueError("รอบตรวจ Outlook ต้องไม่น้อยกว่า 5 วินาที")
+        raise ValueError("Outlook polling must be at least five seconds.")
     for key in ("max_messages_per_folder", "max_body_chars"):
         if not isinstance(mail[key], int) or mail[key] < 1:
-            raise ValueError(f"{key}: ต้องเป็นจำนวนเต็มมากกว่า 0")
+            raise ValueError(f"{key}: enter a positive whole number.")
     if mail["enabled"] and not str(mail["mailbox_filter"]).strip():
-        raise ValueError("กรุณาระบุ Outlook mailbox")
+        raise ValueError("Enter the Outlook mailbox to monitor.")

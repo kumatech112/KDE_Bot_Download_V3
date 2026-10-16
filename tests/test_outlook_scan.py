@@ -56,6 +56,8 @@ def setup_scanner(tmp_path):
     reporter = Reporter(history, events.append)
     scanner = StructuredDownloader(make_engine_settings(settings, tmp_path / "engine.json"),
                                    reporter, Delivery(history, reporter), settings, threading.Event())
+    # Exercise the retained fallback defensively; production now monitors read and unread mail.
+    scanner.settings.mail_watch.unread_only = True
     return settings, history, events, reporter, scanner
 
 
@@ -92,7 +94,7 @@ def test_rejected_mail_filter_falls_back_without_false_error_or_read_flag_change
     assert scanner.mail_failures == []
     assert [item.UnRead for item in values] == [True, False, True]
     assert len(events) == 1 and events[0]["status"] == "notice"
-    assert "ตรวจสถานะเมลทีละรายการ" in events[0]["reason"]
+    assert "bounded per-item checks" in events[0]["reason"]
 
 
 def test_unknown_folder_type_still_scans_mail_and_skips_non_mail_items(tmp_path):
@@ -119,7 +121,7 @@ def test_real_mail_folder_access_failure_remains_an_error(tmp_path):
     inbox.Items = UnavailableItems()
     assert scan(scanner, [inbox]) == {}
     assert len(scanner.mail_failures) == 1
-    assert "อ่านโฟลเดอร์อีเมลไม่ได้" in scanner.mail_failures[0]
+    assert "Cannot read email folder" in scanner.mail_failures[0]
 
 
 def test_fallback_respects_configured_message_limit(tmp_path):
