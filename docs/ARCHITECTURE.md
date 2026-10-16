@@ -1,5 +1,14 @@
 # KDE 3.2 data flow and changed functions
 
+## 3.2.3 changed functions
+
+| File | Functions | Change |
+|---|---|---|
+| src/main.py | filesystem_path | Strip a leading FileSystem provider qualifier before Path can collapse the UNC backslashes; reject empty or non-filesystem provider inputs |
+| src/main.py | main | Use the converter for the three diagnostic output arguments; retain isolated diagnostic execution and unchanged normal launch |
+
+The reported WinError 161 came from a verification command passing PowerShell's provider-qualified location as a Windows path. This is separate from business destination permissions. The fix stays at the launch-argument boundary; no destination, credential, matching or queue implementation is modified. Source VERSION and release documentation are updated.
+
 3.2.2 adds body-instruction matching and password visibility, and labels graceful stop explicitly. Unrelated applications, delivery paths, no-overwrite publication, stored credentials, two-minute queue timing and two-attempt retry budgets are unchanged. The supplied multi-size icon remains embedded and bundled.
 
 ## 3.2.2 changed functions

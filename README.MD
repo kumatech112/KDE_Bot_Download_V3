@@ -1,4 +1,4 @@
-# KDE Download — 3.2.2
+# KDE Download — 3.2.3
 
 A dedicated Windows KDE downloader with a small English interface: **Monitor**, **History**, and **Settings**. Native ttk controls, no theme selector.
 

@@ -1,6 +1,13 @@
-# Verification — 2026-10-16 — 3.2.2
+# Verification — 2026-10-16 — 3.2.3
 
-## Password, Stop and body matching update
+## PowerShell path fix
+
+- Compile and **149 tests plus 4 subtests** passed. New regressions cover qualified UNC paths, plain/local/relative paths, empty and unsupported provider inputs, and routing the converted report to the isolated self-check.
+- The actual packaged EXE was launched with Microsoft.PowerShell.Core\\FileSystem:: qualified UNC paths for self-check output, GUI screenshots and GUI reports. Both commands exited successfully and wrote reports to the real project verification folder; no provider prefix remained in the filesystem paths.
+- All twelve packaged offline checks passed. The actual GUI reported 3.2.3, passed password/Stop checks, and its Settings screenshot was visually checked. Reports carry the EXE hash and powershell_path_input_verified=true.
+- Only src/main.py filesystem_path/main, source VERSION, tests and release documentation change in 3.2.3. No mail, queue, GUI-control, credential, business-destination or permission implementation changes were made.
+
+## Retained 3.2.2 password, Stop and body matching checks
 
 - Compile and **137 tests plus 4 subtests** passed. The first sixteen new body cases cover the eight supplied references, generic/company-only/no-code text, queue routing, date/account/company/number rejection, quoted history, body precedence and ambiguity. Further cases check numeric guards for complete names and extension/month variants, plus body-side precedence over generic subjects without bypassing coded-account conflicts.
 - The source GUI check invoked both Show password controls, confirmed masking/reveal/remasking, invoked Stop, and checked that queue contents were preserved. All three tabs were rendered and Settings was visually checked.
@@ -17,7 +24,7 @@
 ## Source checks completed
 
 - Compile validation passed for src, tools and tests.
-- **137 tests and 4 subtests passed** after the implementation changes.
+- **149 tests and 4 subtests passed** for the final 3.2.3 source.
 - Actual local Tesseract recognized a generated filename screenshot; confidence was above the configured acceptance threshold and content caching prevented a second OCR call.
 - Attachment/CID and base64 inline image paths were exercised with local fixtures. Remote image URLs/scripts were not executed or fetched.
 - Today's read and unread messages were included; previous/future days and outgoing/system folders were excluded without changing read flags.
@@ -42,11 +49,11 @@
 - The actual packaged GUI passed and Settings was visually inspected: three English tabs, independent Show password controls, Stop preserving the queue, four sample queue states, 120-second delay, read-mail policy, automatic-start trigger, history search and readable details.
 - Reports are linked to the tested EXE by SHA-256. No real mailbox or KDE portal was contacted.
 
-Verified EXE SHA-256: `b2d6406d9f1cc6bc6dd6b7cf0043f86a98a75af0e941bf66347ba88e56b9c2d2`
+Verified EXE SHA-256: `aa17d9d983cd73b7937dadf737b4226745869569f71f26e6582e1e11be09f75b`
 
 Verified release folder: `portable`.
 
-The verified 3.2.2 bundle was promoted to `portable`, its EXE hash was rechecked, and the identified old bundle and two intermediate builds were removed. No staged or previous portable folders remain. Only EXE, _internal and Quick start.md are distributed. Local settings, cached sources, shared history and business files were preserved.
+The verified 3.2.3 bundle replaces 3.2.2 at `portable`. Only EXE, _internal and Quick start.md are distributed. Local settings, cached sources, shared history and business files are preserved.
 
 ## Deployment boundary
 

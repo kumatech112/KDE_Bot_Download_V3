@@ -1,4 +1,13 @@
-# KDE Bot Download V3 — 3.2.2
+# KDE Bot Download V3 — 3.2.3
+
+- Fix diagnostic launch paths containing PowerShell's Microsoft.PowerShell.Core\\FileSystem:: prefix before pathlib parses them, preserving UNC double backslashes.
+- Apply the conversion to self-check reports, GUI screenshots and GUI reports. Reject empty or unsupported provider paths before any application or filesystem work begins.
+- Add path-conversion and entrypoint-routing regressions; verify the actual packaged executable using provider-prefixed UNC output paths.
+- Keep GUI controls, body matching, account queues, credential storage and business-file delivery unchanged.
+
+Short commit message: fix: normalize PowerShell diagnostic paths
+
+## 3.2.2
 
 - Add independent Show password controls, initially masked and remasked on Start/Stop.
 - Rename the existing graceful stop control to Stop and make stopping/stopped status explicit; preserve durable queues, retry budgets and logout/save cleanup.
