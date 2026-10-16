@@ -1,4 +1,4 @@
-# KDE Download 3.2.0
+# KDE Download 3.2.1
 
 Open **KDE Bot Download V3.exe**. Keep **_internal** beside it. Python and a separate OCR installation are not required.
 

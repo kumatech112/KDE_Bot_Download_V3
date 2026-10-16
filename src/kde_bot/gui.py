@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import socket
+import sys
 import threading
 import time
 import tkinter as tk
@@ -29,6 +30,23 @@ STATUS_LABELS = {"running": "Working", "stage_complete": "OK", "complete": "Done
 JOB_LABELS = {"waiting": "Queued", "running": "Working", "complete": "Done", "copy_pending": "Save pending",
               "exhausted": "Failed (2/2)", "review": "Needs review", "expired": "Previous day"}
 MODES = {"Both destinations": "both", "Original destination only": "original", "New destination only": "new"}
+
+
+def application_icon_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "assets" / "app.ico"
+    return Path(__file__).resolve().parents[2] / "assets" / "app.ico"
+
+
+def apply_window_icon(root: tk.Tk) -> bool:
+    path = application_icon_path()
+    if not path.is_file():
+        return False
+    try:
+        root.iconbitmap(default=str(path))
+        return True
+    except tk.TclError:
+        return False
 
 
 class Application(ttk.Frame):
@@ -80,10 +98,18 @@ class Application(ttk.Frame):
             root.after(600, self.load_history)
 
     def build_controls(self) -> None:
+        from PIL import Image, ImageTk
         header = ttk.Frame(self)
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
-        ttk.Label(header, text="KDE Download", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+        self.brand_icon = None
+        try:
+            with Image.open(application_icon_path()) as icon:
+                self.brand_icon = ImageTk.PhotoImage(icon.ico.getimage((32, 32)), master=self.root)
+        except OSError:
+            pass
+        ttk.Label(header, text="  KDE Download" if self.brand_icon else "KDE Download", image=self.brand_icon or "",
+                  compound="left", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(header, text=VERSION).grid(row=0, column=1, sticky="e")
         toolbar = ttk.Frame(self)
         toolbar.grid(row=1, column=0, sticky="ew", pady=(12, 8))
@@ -583,6 +609,7 @@ class Application(ttk.Frame):
 
 def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = None) -> int:
     root = tk.Tk()
+    window_icon_applied = apply_window_icon(root)
     root.title("KDE Download")
     root.geometry(f"1180x{min(780, root.winfo_screenheight() - 90)}+20+20")
     root.minsize(1000, 650)
@@ -635,6 +662,7 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
             screenshot(app.settings_page, smoke_screenshot.with_name(smoke_screenshot.stem + "-settings.png"))
             screenshot(app.activity_page, smoke_screenshot.with_name(smoke_screenshot.stem + "-history.png"))
             report = {"gui_started": True, "version": VERSION, "language": "en", "tab_count": len(app.tabs.tabs()),
+                      "window_icon_applied": window_icon_applied, "header_icon_applied": app.brand_icon is not None,
                       "activity_rows": len(app.activity_table.get_children()), "mail_queue_rows": len(app.job_table.get_children()),
                       "error_rows": 1, "fixed_step_checklist": False, "theme_selector": False, "account_folder_overrides": False,
                       "history_search_passed": search_passed, "readable_event_details": details_passed, "auto_start_passed": auto_started,

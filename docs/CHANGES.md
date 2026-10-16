@@ -1,4 +1,13 @@
-# KDE Bot Download V3 — 3.2.0
+# KDE Bot Download V3 — 3.2.1
+
+- Apply the user-provided robot/download icon to the Windows executable, app windows and header.
+- Keep one multi-size ICO asset; bundle it under _internal/assets for source and portable use.
+- Verify runtime window/header icons and record the source icon hash in build evidence.
+- Keep download, mail, OCR, queue, credentials and storage behavior unchanged.
+
+Short commit message: feat: apply supplied KDE download icon
+
+## 3.2.0
 
 - Replace the busy Thai interface with three English tabs: Monitor, History and Settings.
 - Start the configured monitor on launch; simplify primary actions and move uncommon settings/tools out of the main workflow.

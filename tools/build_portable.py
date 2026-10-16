@@ -69,6 +69,7 @@ def main() -> int:
     command = [
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--windowed",
         "--noupx", "--name", NAME, "--icon", str(icon),
+        "--add-data", str(icon) + ";assets",
         "--paths", str(source), "--distpath", str(local / "dist"),
         "--workpath", str(local / "build"), "--specpath", str(local),
         "--collect-all", "playwright", "--collect-all", "greenlet",
@@ -124,6 +125,7 @@ def main() -> int:
         "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
         "local_build": str(local), "build_log": str(build_log),
         "bundled_browser": True, "bundled_ocr": True, "contains_credentials": False,
+        "icon_sha256": hashlib.sha256(icon.read_bytes()).hexdigest(),
     }
     verification = ROOT / "docs/verification"
     verification.mkdir(parents=True, exist_ok=True)

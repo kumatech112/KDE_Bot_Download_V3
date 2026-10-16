@@ -1,5 +1,7 @@
 # KDE 3.2 data flow and changed functions
 
+3.2.1 changes assets/app.ico; gui.application_icon_path, apply_window_icon, Application.build_controls and launch; build_portable.main; and promote_portable.main. The provided multi-size ICO is embedded in the EXE and included under _internal/assets for window/header rendering. The source VERSION and release documentation are updated. No mail, OCR, queue, credential or business-file delivery functions are changed.
+
 Flow: per-user settings → read-only business destination checks / mutable shared Log lock → pending-save repair → today's Outlook messages → text + local OCR evidence → account/date routing or review → durable two-minute FIFO → isolated Pre/Post sessions → full-catalogue matching → local validated download → exclusive final-file publication → hash verification → logout → completion or one bounded retry.
 
 ## Production function map

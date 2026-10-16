@@ -1,4 +1,13 @@
-# Verification — 2026-10-16 — 3.2.0
+# Verification — 2026-10-16 — 3.2.1
+
+## Icon update
+
+- The supplied download-file.ico was copied byte-for-byte to assets/app.ico. SHA-256: `8ad034733f09aeaca0ca829db1845eb738550f8b6717b574009b9d251060a587`.
+- All seven ICO frames (16, 24, 32, 48, 64, 128 and 256 pixels) match the embedded Windows EXE icon resources exactly.
+- The bundled _internal/assets/app.ico matches the original supplied ICO.
+- Actual source and packaged GUI checks confirm the default window icon and 32-pixel header icon are applied. The packaged header was visually inspected.
+- Compile, all 119 regression tests plus 4 subtests, and all eleven packaged offline checks passed for 3.2.1.
+- The change is limited to the supplied icon, icon loading, build/release evidence, version and documentation. Mail, OCR, queue, credential and delivery behavior are preserved.
 
 ## Source checks completed
 
@@ -28,11 +37,11 @@
 - The actual packaged GUI passed and was visually inspected: three English tabs, four sample queue states, 120-second delay, read-mail policy, automatic-start trigger, history search and readable details.
 - Reports are linked to the tested EXE by SHA-256. No real mailbox or KDE portal was contacted.
 
-Verified EXE SHA-256: `fabf6676480cc880e497e3d72485758f80dac772e14f690a5fc349126b35e991`
+Verified EXE SHA-256: `e97ca3737e0197ab62ef5dd33f6a5efa4eee35bba1cc61130f50ca4f38a7f7d5`
 
 Verified release folder: `portable`.
 
-After the user closed the old KDE window, Windows released the executable. The verified 3.2.0 bundle was promoted to `portable`, its EXE hash was rechecked, and the identified old bundle was removed. No staged or previous portable folders remain. Only EXE, _internal and Quick start.md are distributed. Local settings, cached sources, shared history and business files were preserved.
+The verified 3.2.1 bundle was promoted to `portable`, its EXE hash was rechecked, and the identified old bundle was removed. No staged or previous portable folders remain. Only EXE, _internal and Quick start.md are distributed. Local settings, cached sources, shared history and business files were preserved.
 
 ## Deployment boundary
 
