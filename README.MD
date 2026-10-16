@@ -1,4 +1,4 @@
-# KDE Download — 3.2.1
+# KDE Download — 3.2.2
 
 A dedicated Windows KDE downloader with a small English interface: **Monitor**, **History**, and **Settings**. Native ttk controls, no theme selector.
 
@@ -8,6 +8,9 @@ Read [Quick Start](docs/QUICK_START.md) for setup and daily use.
 
 ## Behavior
 
+- **Show password** independently reveals either account password while editing; passwords start hidden and hide again when monitoring starts or stops.
+- **Stop** ends monitoring safely after the active save/logout; queued work and attempt counts remain available on restart.
+- Reads body instructions and incomplete business references, including the supplied TSS/AYCAP, Daily Recovery, SAM CustomerRequest, Document Round, litigation/legal-type, HC Report and Db Bank examples. `A10XX`/`A10XXL` target `A1015`/`A1015L`; a date placeholder uses the email day. `1015`, `Axxxx` or `L10xx` alone cannot select a file or account.
 - Starts monitoring automatically after valid local account setup.
 - Tracks today's incoming Outlook messages in Bangkok time, including read mail; processed message IDs prevent repeated work.
 - Uses subject/body references, attachment filenames and local image OCR. **Import image** supports separate screenshots.

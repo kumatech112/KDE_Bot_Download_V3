@@ -20,6 +20,7 @@ from typing import Any
 from PIL import Image, ImageOps
 
 from . import legacy_core as core
+from .instructions import MARKER, current_body, instruction_lookup
 
 
 BANGKOK = timezone(timedelta(hours=7))
@@ -40,8 +41,8 @@ def ocr_home() -> Path:
 def correct_reference(text: str) -> str:
     """Correct common OCR account-code errors only inside an account marker."""
     text = core.normalize_thai_digits(text)
-    text = re.sub(r"(?i)\bA[1Il][0O][1Il][5S](L?)\b", r"A1015\1", text)
-    text = re.sub(r"(?i)\bA[1Il][0O]XX(L?)\b", r"A10XX\1", text)
+    text = re.sub(r"(?i)(?<![a-z0-9])A[1Il][0O][1Il][5S](L?)(?![a-z0-9])", r"A1015\1", text)
+    text = re.sub(r"(?i)(?<![a-z0-9])A[1Il][0O]XX(L?)(?![a-z0-9])", r"A10XX\1", text)
     return text
 
 
@@ -167,6 +168,13 @@ class MailEvidenceReader:
             pass
         html_text = "\n".join(parser.text)[:20000]
         result["lookup"].update(reference_lookup(html_text, "Email text"))
+        body_text = current_body(str(getattr(item, "Body", "") or ""))
+        body_lookup = instruction_lookup(correct_reference(body_text or html_text))
+        result["lookup"].update(body_lookup)
+        preferred = {key: value for key, value in body_lookup.items()
+                     if "[Email instruction]" in value or MARKER.search(key)}
+        if preferred:
+            result["preferred_lookup"] = preferred
         image_texts = []
         with tempfile.TemporaryDirectory(prefix="kde-mail-images-") as temporary:
             images: list[Path] = []
@@ -229,12 +237,24 @@ class MailEvidenceReader:
                         result["review"] = True
                 except Exception as error:
                     result["notes"].append(f"Image OCR unavailable: {type(error).__name__}: {error}")
-        combined = subject + "\n" + html_text + "\n" + "\n".join(image_texts)
+        combined = subject + "\n" + body_text + "\n" + current_body(html_text) + "\n" + "\n".join(image_texts)
         sides = set(re.findall(r"(?i)\b(pre|post)\b", combined))
         sides = {side.lower() for side in sides}
-        if len(sides) == 1:
+        body_sides = {side.lower() for side in re.findall(r"(?i)\b(pre|post)\b", body_text or current_body(html_text))}
+        image_sides = {side.lower() for side in re.findall(r"(?i)\b(pre|post)\b", "\n".join(image_texts))}
+        if len(body_sides) == 1:
+            result["side"] = next(iter(body_sides))
+            if image_sides and image_sides != body_sides:
+                result["review"] = True
+                result["notes"].append("Email body and image specify different account sides.")
+        elif len(body_sides) > 1 or len(sides) > 1:
+            result["review"] = True
+            result["notes"].append("Multiple account sides stated; confirm the account and reference.")
+        elif len(sides) == 1:
             result["side"] = sides.pop()
-        result["relevant"] = bool(result["lookup"]) or bool(re.search(r"(?i)\bkde\b|krungsri|\bpre\b|\bpost\b", subject))
+        result["relevant"] = bool(result["lookup"]) or bool(MARKER.search(body_text)) or bool(re.search(r"(?i)\bkde\b|krungsri|\bpre\b|\bpost\b", subject))
+        if result["relevant"] and not result["lookup"]:
+            result["notes"].append("No specific file reference found; a company keyword alone is insufficient.")
         if result["relevant"] and not result["lookup"] and (images or result["notes"]):
             result["review"] = True
         if identity:

@@ -38,7 +38,7 @@ def route_lookup(message: dict[str, Any], side: str) -> dict[str, str]:
     explicit_sides = {reference_side(key) for key in lookup}
     explicit_sides.discard(None)
     subject = message.get("subject", "").casefold()
-    if not explicit_sides:
+    if not explicit_sides and not message.get("side"):
         import re
         explicit_sides = set(re.findall(r"\b(pre|post)\b", subject))
     if message.get("side") in {"pre", "post"}:
@@ -120,7 +120,7 @@ class MailQueue:
                 sides = {reference_side(key) for key in message["lookup"]}
                 sides.discard(None)
                 conflict = bool(message.get("side") and sides and message["side"] not in sides)
-                if not sides:
+                if not sides and not message.get("side"):
                     import re
                     sides = set(re.findall(r"\b(pre|post)\b", message.get("subject", "").lower()))
                 if message.get("side"):

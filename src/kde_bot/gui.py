@@ -63,6 +63,7 @@ class Application(ttk.Frame):
         self.jobs: dict[str, dict[str, Any]] = {}
         self.activity = ActivityHistory()
         self.variables: dict[str, tk.Variable] = {}
+        self.password_controls: dict[str, tuple[Any, tk.BooleanVar, Any]] = {}
         self.inputs: list[Any] = []
         self.busy_buttons: list[Any] = []
         self.status = tk.StringVar(value="Ready")
@@ -116,7 +117,7 @@ class Application(ttk.Frame):
         self.start_button = ttk.Button(toolbar, text="Start monitor", command=lambda: self.start("watch"))
         self.start_button.pack(side="left")
         self.busy_buttons.append(self.start_button)
-        self.stop_button = ttk.Button(toolbar, text="Pause", command=self.stop, state="disabled")
+        self.stop_button = ttk.Button(toolbar, text="Stop", command=self.stop, state="disabled")
         self.stop_button.pack(side="left", padx=6)
         ttk.Button(toolbar, text="Import image", command=self.import_image).pack(side="left", padx=(8, 6))
         ttk.Button(toolbar, text="Review request", command=self.review_request).pack(side="left")
@@ -190,10 +191,26 @@ class Application(ttk.Frame):
             widget = ttk.Entry(parent, textvariable=variable, show="*" if password else "")
         widget.grid(row=row, column=1, sticky="ew", pady=5)
         self.inputs.append(widget)
+        if password:
+            visible = tk.BooleanVar(value=False)
+            toggle = ttk.Checkbutton(parent, text="Show password", variable=visible,
+                                     command=lambda: self.toggle_password(path))
+            toggle.grid(row=row + 1, column=1, sticky="w", pady=(0, 5))
+            self.password_controls[path] = (widget, visible, toggle)
+            self.inputs.append(toggle)
         if browse:
             button = ttk.Button(parent, text="Browse", command=lambda: self.browse(variable))
             button.grid(row=row, column=2, padx=(8, 0))
             self.busy_buttons.append(button)
+
+    def toggle_password(self, path: str) -> None:
+        entry, visible, _toggle = self.password_controls[path]
+        entry.configure(show="" if visible.get() else "*")
+
+    def hide_passwords(self) -> None:
+        for entry, visible, _toggle in self.password_controls.values():
+            visible.set(False)
+            entry.configure(show="*")
 
     def build_settings(self) -> None:
         page = self.settings_page
@@ -269,6 +286,7 @@ class Application(ttk.Frame):
 
     def fill_settings(self) -> None:
         from .settings import default_settings
+        self.hide_passwords()
         while len(self.settings["accounts"]) < 2:
             account = default_settings()["accounts"][len(self.settings["accounts"])]
             account["enabled"] = False
@@ -319,7 +337,7 @@ class Application(ttk.Frame):
 
     def import_configuration(self) -> None:
         if self.worker and self.worker.is_alive():
-            messagebox.showinfo("Pause first", "Pause the monitor before changing settings.", parent=self.root)
+            messagebox.showinfo("Stop first", "Stop the monitor before changing settings.", parent=self.root)
             return
         path = filedialog.askopenfilename(parent=self.root, title="Import KDE settings", filetypes=[("JSON", "*.json")])
         if path:
@@ -333,7 +351,7 @@ class Application(ttk.Frame):
 
     def import_history(self) -> None:
         if self.worker and self.worker.is_alive():
-            messagebox.showinfo("Pause first", "Pause the monitor before importing history.", parent=self.root)
+            messagebox.showinfo("Stop first", "Stop the monitor before importing history.", parent=self.root)
             return
         path = filedialog.askopenfilename(parent=self.root, title="Import old KDE history", filetypes=[("JSON", "*.json")])
         if not path:
@@ -412,7 +430,7 @@ class Application(ttk.Frame):
 
     def repair_saves(self) -> None:
         if self.worker and self.worker.is_alive():
-            self.status.set("Pause before repairing pending saves.")
+            self.status.set("Stop before repairing pending saves.")
         else:
             self.start("retry")
 
@@ -454,9 +472,12 @@ class Application(ttk.Frame):
 
     def stop(self) -> None:
         self.stop_event.set()
-        self.status.set("Pausing — finishing the current save and logout")
+        self.hide_passwords()
+        self.stop_button.configure(state="disabled")
+        self.status.set("Stopping — finishing the current save and logout")
 
     def set_busy(self, busy: bool) -> None:
+        self.hide_passwords()
         for button in self.busy_buttons:
             button.configure(state="disabled" if busy else "normal")
         for widget in self.inputs:
@@ -486,7 +507,7 @@ class Application(ttk.Frame):
             elif kind == "idle":
                 self.set_busy(False)
                 if self.stop_event.is_set():
-                    self.status.set("Paused")
+                    self.status.set("Stopped")
         if changed:
             self.render_results()
         self.poll_id = self.root.after(100, self.drain_events)
@@ -650,6 +671,19 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
             with patch.object(app, "start") as start:
                 app.auto_start(force=True)
                 auto_started = start.call_args is not None and start.call_args.args == ("watch",)
+            password_toggle_passed = True
+            for entry, visible, toggle in app.password_controls.values():
+                password_toggle_passed &= entry.cget("show") == "*" and not visible.get()
+                toggle.invoke()
+                password_toggle_passed &= entry.cget("show") == "" and visible.get()
+                toggle.invoke()
+                password_toggle_passed &= entry.cget("show") == "*" and not visible.get()
+            jobs_before_stop = copy.deepcopy(app.jobs)
+            app.set_busy(True)
+            app.stop_button.invoke()
+            stop_passed = app.stop_event.is_set() and app.jobs == jobs_before_stop and app.stop_button.cget("text") == "Stop"
+            app.set_busy(False)
+            app.stop_event.clear()
             app.fill_settings()
             app.status.set("Monitoring today's mail · Active accounts 1/2")
             smoke_screenshot.parent.mkdir(parents=True, exist_ok=True)
@@ -666,6 +700,7 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                       "activity_rows": len(app.activity_table.get_children()), "mail_queue_rows": len(app.job_table.get_children()),
                       "error_rows": 1, "fixed_step_checklist": False, "theme_selector": False, "account_folder_overrides": False,
                       "history_search_passed": search_passed, "readable_event_details": details_passed, "auto_start_passed": auto_started,
+                      "password_toggle_passed": bool(password_toggle_passed), "stop_control_passed": stop_passed,
                       "mail_delay_seconds": app.settings["mail_delay_seconds"], "login_retry_seconds": app.settings["login_retry_seconds"],
                       "max_session_attempts": 2, "today_only": app.settings["mail_watch"]["today_only"],
                       "includes_read_mail": not app.settings["mail_watch"]["unread_only"], "machine": socket.gethostname(), "live_portal_access": False}

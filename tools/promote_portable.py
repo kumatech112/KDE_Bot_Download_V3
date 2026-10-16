@@ -73,6 +73,7 @@ def main() -> int:
                                        or not report.get("history_search_passed") or not report.get("readable_event_details")
                                        or report.get("language") != "en" or report.get("tab_count") != 3
                                        or not report.get("auto_start_passed") or report.get("mail_delay_seconds") != 120
+                                       or not report.get("password_toggle_passed") or not report.get("stop_control_passed")
                                        or not report.get("includes_read_mail") or not report.get("today_only")
                                        or not report.get("window_icon_applied") or not report.get("header_icon_applied")):
             raise ValueError("Packaged GUI verification failed")

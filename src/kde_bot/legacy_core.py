@@ -1548,6 +1548,11 @@ class KdeDownloader:
                         evidence = reader(item, subject, received)
                         current_mail_lookup.update(evidence.get("lookup", {}))
                         lookup.update(evidence.get("lookup", {}))
+                        if evidence.get("preferred_lookup"):
+                            # The current body's explicit file instruction takes
+                            # precedence over a generic subject or quoted names.
+                            current_mail_lookup.clear()
+                            current_mail_lookup.update(evidence["preferred_lookup"])
                     except Exception as error:
                         evidence = {"review": True, "relevant": "kde" in subject.lower(),
                                     "notes": [f"Cannot read email evidence: {type(error).__name__}: {error}"]}

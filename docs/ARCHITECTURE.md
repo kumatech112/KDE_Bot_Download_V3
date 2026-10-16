@@ -1,6 +1,23 @@
 # KDE 3.2 data flow and changed functions
 
-3.2.1 changes assets/app.ico; gui.application_icon_path, apply_window_icon, Application.build_controls and launch; build_portable.main; and promote_portable.main. The provided multi-size ICO is embedded in the EXE and included under _internal/assets for window/header rendering. The source VERSION and release documentation are updated. No mail, OCR, queue, credential or business-file delivery functions are changed.
+3.2.2 adds body-instruction matching and password visibility, and labels graceful stop explicitly. Unrelated applications, delivery paths, no-overwrite publication, stored credentials, two-minute queue timing and two-attempt retry budgets are unchanged. The supplied multi-size icon remains embedded and bundled.
+
+## 3.2.2 changed functions
+
+| File | Functions | Change |
+|---|---|---|
+| instructions.py | current_body, normalize_template_markers, instruction_lookup | Bound current sender text, normalize own-company templates, extract partial business references and retain explicit dates/numbers |
+| instructions.py | instruction_match, own_company_compatible | Require all business words/numbers, account/date compatibility and own company; retain equal-quality ambiguity protection |
+| evidence.py | correct_reference, MailEvidenceReader.read | Correct account OCR before underscores, read plain Body and HTML, expose preferred body instructions and review-only company hints |
+| legacy_core.py | scan_mail_filenames / scan_folder | Use V3 preferred body references for each message while retaining the generic scanner's compatibility |
+| mail_queue.py | route_lookup, MailQueue.ingest | Prefer the body/image's explicit side over generic subject labels, while rejecting conflicts with coded file references |
+| workflow.py | StructuredDownloader._match_single_mail_key, run_mail_monitor | Apply guarded partial-body matching; report stopped sessions clearly |
+| gui.py | Application.__init__, build_controls, add_field, toggle_password, hide_passwords, fill_settings | Independent transient visibility controls, default masking and explicit Stop button |
+| gui.py | stop, set_busy, drain_events, import_configuration, import_history, repair_saves, launch | Remask passwords, preserve safe stopping, consistent English labels, exercise both controls in isolated GUI smoke |
+| selfcheck.py | check_body_instructions, run_self_check | Verify matching in the actual portable executable with isolated fixture data |
+| tools/promote_portable.py | main | Require the packaged password and Stop checks before release promotion |
+
+Full names continue through the existing precise matching path. Partial body references use all business words and exact numeric identifiers, plus the existing per-job date/account filtering and global catalogue selection. The eight user-supplied references are regression fixtures. A company code alone produces no selector; neutral generic company patterns require separate side evidence. Current explicit body file instructions override unrelated subject references; quoted message history is not used as the current instruction. Rules remain bounded and conservative rather than claiming arbitrary natural-language understanding.
 
 Flow: per-user settings → read-only business destination checks / mutable shared Log lock → pending-save repair → today's Outlook messages → text + local OCR evidence → account/date routing or review → durable two-minute FIFO → isolated Pre/Post sessions → full-catalogue matching → local validated download → exclusive final-file publication → hash verification → logout → completion or one bounded retry.
 

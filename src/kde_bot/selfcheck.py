@@ -17,6 +17,51 @@ from .settings import atomic_json, default_settings, load_settings, save_setting
 from .storage import Delivery, History, Reporter, WorkerLock
 
 
+def check_body_instructions(root: Path) -> None:
+    from .evidence import MailEvidenceReader
+    from .workflow import StructuredDownloader, make_engine_settings
+    from .instructions import instruction_lookup
+    from .mail_queue import MailQueue
+    settings = default_settings()
+    settings["accounts"][0]["username"] = "offline-body-pre"
+    settings["accounts"][1]["username"] = "offline-body-post"
+    logs = root / "body-logs"
+    logs.mkdir()
+    history = History(logs)
+    reporter = Reporter(history, lambda _event: None)
+    engine = StructuredDownloader(make_engine_settings(settings, root / "body.json"), reporter,
+                                  Delivery(history, reporter), settings, threading.Event())
+    cases = [
+        (0, "Please download Pre payment online 67097 for company 1015", "A1015_PAYMENT_ONLINE_67097_16102026.zip.gpg"),
+        (1, "A10xxL_SAM_CustomerRequest_JA2_xxxxxx", "A1015L_SAM_CustomerRequest_JA2_16102026.zip.gpg"),
+        (1, "A10xxL_SelectACLitigation_LegalType_11_21_31_StopAC", "A1015L_SelectACLitigation_LegalType_11_21_31_StopAC_16102026.zip.gpg"),
+        (1, "File Name: A10xxL_SelectACLitigation_LegalType_11_21_31_StopAC_16102026.xlsx.gpg", "A1015L_SelectACLitigation_LegalType_11_21_31_StopAC_16102026.zip.gpg"),
+        (0, "File Name: A10XX_Daily_Recovery_Performance_Oct26.zip.gpg", "A1015_Daily_Recovery_Performance_Oct26.zip.gpg"),
+    ]
+    for index, (account, body, filename) in enumerate(cases):
+        evidence = MailEvidenceReader().read(SimpleNamespace(Body=body, Attachments=SimpleNamespace(Count=0)), "Notice", None)
+        lookup = evidence["preferred_lookup"]
+        engine.jobs = [{"id": str(index), "account": settings["accounts"][account]["username"],
+                        "lookup": lookup, "work_date": "2026-10-16"}]
+        selected, ambiguous = engine._select_page_mail_matches([
+            (0, {"filename": filename, "file_time": "16/10/2026"}),
+            (1, {"filename": filename.replace("A1015", "A9999"), "file_time": "16/10/2026"}),
+        ], lookup)
+        assert set(selected) == {0} and not ambiguous
+        if "LegalType" in filename:
+            selected, ambiguous = engine._select_page_mail_matches([
+                (0, {"filename": filename.replace("_31_", "_32_"), "file_time": "16/10/2026"}),
+            ], lookup)
+            assert not selected and not ambiguous
+    assert instruction_lookup("Keyword 1015") == {}
+    evidence = MailEvidenceReader().read(SimpleNamespace(Body="Please download Post Axxxx payment online 67097",
+                                                        Attachments=SimpleNamespace(Count=0)), "Pre notification", None)
+    queue = MailQueue(history, reporter, settings)
+    queue.ingest([{"entry_id": "body-side", "subject": "Pre notification", **evidence,
+                   "lookup": evidence["preferred_lookup"]}], 0)
+    assert set(queue.claim_ready(120, set())) == {"offline-body-post"}
+
+
 def check_portal_catalogue(root: Path) -> None:
     """Exercise the real browser pagination selectors against local HTML only."""
     from .legacy_core import sync_playwright_without_console
@@ -360,6 +405,8 @@ def run_self_check(output: Path) -> int:
             result["checks"].append("Actual bundled English/Thai OCR reads a sample screenshot; strict FIFO, two-minute delay, busy-user retry and final-filename-only publication passed offline")
             check_portal_catalogue(root)
             result["checks"].append("Actual offline browser: previous/next pagination, cross-page ambiguity rejection and precise-reference precedence before any click")
+            check_body_instructions(root)
+            result["checks"].append("Body instructions: 1015 fallback, generic account templates, unknown-date placeholders, legal-type numbers and monthly filenames; foreign company and company-only references rejected")
         result["status"] = "passed"
         exit_code = 0
     except Exception as error:

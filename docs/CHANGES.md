@@ -1,4 +1,15 @@
-# KDE Bot Download V3 — 3.2.1
+# KDE Bot Download V3 — 3.2.2
+
+- Add independent Show password controls, initially masked and remasked on Start/Stop.
+- Rename the existing graceful stop control to Stop and make stopping/stopped status explicit; preserve durable queues, retry budgets and logout/save cleanup.
+- Parse current plain-text/HTML email body instructions separately from generic subjects. Prefer explicit body file instructions and company-marked body references.
+- Match incomplete business names using all stated business words and exact numbers; support the eight supplied examples, own-company template normalization and unknown date placeholders.
+- Keep date/account checks, full-catalogue ambiguity rejection, exactly two attempts, 120-second delay, and flat no-overwrite business storage.
+- Add actual packaged body checks and GUI toggle/Stop verification; retain supplied icon and existing release layout.
+
+Short commit message: feat: add password visibility, stop and email body matching
+
+## 3.2.1
 
 - Apply the user-provided robot/download icon to the Windows executable, app windows and header.
 - Keep one multi-size ICO asset; bundle it under _internal/assets for source and portable use.

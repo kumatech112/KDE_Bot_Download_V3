@@ -1,4 +1,4 @@
-# KDE Download 3.2.1
+# KDE Download 3.2.2
 
 Open **KDE Bot Download V3.exe**. Keep **_internal** beside it. Python and a separate OCR installation are not required.
 
@@ -14,9 +14,9 @@ The executable's network location does not determine where Outlook or credential
 ## Everyday use
 
 - **Monitor** shows one row per email/image request, its account, queue order, remaining wait, attempts and result.
-- **Pause** waits for active work and logout. **Start monitor** resumes.
+- **Stop** ends monitoring, waits for the current save and logout, and retains queued requests and attempt counts. **Start monitor** resumes retained work under the same timing and retry rules.
 - **History** keeps chronological actions and exact failures. Search or double-click an event for details.
-- **Settings** contains the mailbox, destinations and two accounts. Pause before changing settings. Less common options are behind **More options**.
+- **Settings** contains the mailbox, destinations and two accounts. Stop before changing settings. Each account has **Show password**, initially unchecked. Revealed passwords hide again on Start or Stop. Less common options are behind **More options**.
 - **Tools** contains connection checks, failed-request retries, pending-save repair and imports.
 
 ## Mail and queue rules
@@ -28,6 +28,12 @@ New qualifying mail waits **two minutes from discovery**. Each account processes
 No queued work means no KDE login. Each request gets **two attempts total**. A busy user or login failure waits five minutes before its second attempt. Missing/download failures retry in a fresh session after logout. After two failures, the request stops; new mail does not reset its budget. Closing/reopening retains attempts and processed IDs. Older-day waiting work expires instead of opening KDE automatically.
 
 ## Images and matching
+
+The current email body can name a complete file or just its business words. A clear file/download instruction takes priority over an unrelated subject. For example, `1015` plus `Pre payment online 67097` can identify the file even without its full name. If no company keyword is present, the same business words are still checked. A company keyword alone never downloads anything.
+
+`A10XX` means your `A1015` Pre account; `A10XXL` means your `A1015L` Post account. Generic `Axxxx` or `L10xx` placeholders do not identify the side: the email must say Pre/Post or the request needs review. A trailing `xxxxxx` date placeholder is ignored; the email day applies unless another explicit business date/month is supplied. Explicit dates such as `09102026` remain meaningful even if the email arrived today.
+
+Supported supplied examples include `TSS_ReviewAc_AYCAP`, `Daily_Recovery_Performance_Oct26`, `SAM_CustomerRequest_JA2`, `Document_Round2`, `TSS_Document_AYCAP`, `SelectACLitigation_LegalType_11_21_31_StopAC`, `TSS_HC_Report_App_ProWO`, and `Db_Bank_KTA_TSS`. Incomplete references must still match all supplied business words and numbers. Equally plausible different files remain unselected. This is local rule-based matching, not unrestricted language understanding.
 
 The bundled local OCR engine reads English/Thai text from image attachments and locally embedded email pictures, including CID attachments and base64 HTML images. Supported image formats: PNG, JPEG, GIF, BMP, TIFF and WebP. Subject, body and attachment filename evidence are also used. A filename in the email can have a different archive/document extension from KDE.
 
@@ -49,7 +55,7 @@ The business destinations must already exist. The app creates **no account folde
 
 Windows/SMB must allow saving and reading the final file. Calling an operation a download does not bypass file permissions. On Windows the new file is locked against other readers until publication finishes and its hash is verified. A crash or failed save can leave an incomplete final file; it will not be overwritten automatically. Check/remove that specific incomplete file with appropriate access before repairing the save.
 
-If saving fails, the validated local source is retained. Pause and use **Tools > Repair pending saves**. Repair does not log in or redownload. A pending save holds later work for that account until it is repaired. Restart the monitor after repair. Another machine cannot use a local cached source that exists only on the original machine.
+If saving fails, the validated local source is retained. Stop and use **Tools > Repair pending saves**. Repair does not log in or redownload. A pending save holds later work for that account until it is repaired. Restart the monitor after repair. Another machine cannot use a local cached source that exists only on the original machine.
 
 The separate Log folder holds **KDE_State.json**, **one CSV per month**, and the worker lock. It must permit updates and cleanup. Only one monitor may own the shared Log folder at a time; its two internal account workers are allowed. Local settings/cache live under **%LOCALAPPDATA%\KDE Bot Download V3**, keeping the program folder clean.
 

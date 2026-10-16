@@ -20,6 +20,7 @@ from .settings import validate_settings, settings_home
 from .storage import Delivery, History, Reporter, WorkerLock, check_destination, check_writable
 from .mail_queue import MailQueue, account_side
 from .evidence import MailEvidenceReader, today
+from .instructions import instruction_match
 from .matching import ocr_match, row_matches_job_date
 
 
@@ -75,6 +76,12 @@ class StructuredDownloader(core.KdeDownloader):
         self.mail_evidence_reader = self.evidence_reader.read
 
     def _match_single_mail_key(self, kde_key, mail_key, original):
+        if any(source in original for source in ("[Email instruction]", "[Email body words]")):
+            body_match = instruction_match(kde_key, mail_key, original)
+            if not body_match:
+                return None
+            if not core.has_known_file_extension(mail_key):
+                return body_match
         return super()._match_single_mail_key(kde_key, mail_key, original) or ocr_match(kde_key, mail_key, original)
 
     def _select_page_mail_matches(self, rows, allowed_filenames):
@@ -519,4 +526,4 @@ def run_mail_monitor(settings: dict[str, Any], stop_event: threading.Event,
         # Logout finishes in each worker before the monitor releases the shared lock.
         for future in active.values():
             mail_queue.finish(future.result(), time.time(), stop_event.is_set())
-    reporter.emit(8, "summary", "Paused; account sessions closed" if stop_event.is_set() else "Email queue finished")
+    reporter.emit(8, "summary", "Stopped; account sessions closed" if stop_event.is_set() else "Email queue finished")
