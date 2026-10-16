@@ -1,4 +1,4 @@
-# KDE Download — 3.2.3
+# KDE Download — 3.2.4
 
 A dedicated Windows KDE downloader with a small English interface: **Monitor**, **History**, and **Settings**. Native ttk controls, no theme selector.
 
@@ -8,6 +8,7 @@ Read [Quick Start](docs/QUICK_START.md) for setup and daily use.
 
 ## Behavior
 
+- Reads portal rows in a batch and delivers requested files on the return path after checking the full catalogue. Page loading must finish and settle; unchanged or unreadable navigation fails clearly.
 - **Show password** independently reveals either account password while editing; passwords start hidden and hide again when monitoring starts or stops.
 - **Stop** ends monitoring safely after the active save/logout; queued work and attempt counts remain available on restart.
 - Reads body instructions and incomplete business references, including the supplied TSS/AYCAP, Daily Recovery, SAM CustomerRequest, Document Round, litigation/legal-type, HC Report and Db Bank examples. `A10XX`/`A10XXL` target `A1015`/`A1015L`; a date placeholder uses the email day. `1015`, `Axxxx` or `L10xx` alone cannot select a file or account.

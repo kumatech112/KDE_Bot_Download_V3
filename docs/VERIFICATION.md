@@ -1,6 +1,14 @@
-# Verification — 2026-10-16 — 3.2.3
+# Verification — 2026-10-16 — 3.2.4
 
-## PowerShell path fix
+## Reviewed paging optimization
+
+- Compile and **159 tests plus 4 subtests** passed. The supplied navigation-order, stable-table and bulk-read tests were retained and strengthened. Further tests cover timeout refusal, old/empty transient resets, unreadable starting tables, Stop, fallback reading and changed row positions after a download.
+- All thirteen source offline checks passed. The new real-browser scenario uses locally intercepted background polling, a 750 ms loading placeholder without a busy marker, complete table snapshots, reverse delivery across three pages, a page emptied by its download, a row shifted to index zero, an explicit busy marker, stalled navigation and cancellation.
+- The actual packaged 3.2.4 EXE passed the same thirteen offline checks, including the new browser scenario. Its GUI passed and Settings was visually inspected. Provider-qualified diagnostic arguments also remained verified.
+- The supplied patch's silent timeout and text-only readiness were corrected. File metadata is now reread before every action. Complete-catalogue ambiguity, file/account/date/number guards, FIFO, two attempts, 120-second delay and no-overwrite publication remain covered.
+- Later portal pages can deliver first within one request. Account email FIFO is retained. Login navigation and credentials are unchanged. No live KDE performance benchmark is claimed.
+
+## Retained 3.2.3 PowerShell path checks
 
 - Compile and **149 tests plus 4 subtests** passed. New regressions cover qualified UNC paths, plain/local/relative paths, empty and unsupported provider inputs, and routing the converted report to the isolated self-check.
 - The actual packaged EXE was launched with Microsoft.PowerShell.Core\\FileSystem:: qualified UNC paths for self-check output, GUI screenshots and GUI reports. Both commands exited successfully and wrote reports to the real project verification folder; no provider prefix remained in the filesystem paths.
@@ -24,7 +32,7 @@
 ## Source checks completed
 
 - Compile validation passed for src, tools and tests.
-- **149 tests and 4 subtests passed** for the final 3.2.3 source.
+- **159 tests and 4 subtests passed** for the final 3.2.4 source.
 - Actual local Tesseract recognized a generated filename screenshot; confidence was above the configured acceptance threshold and content caching prevented a second OCR call.
 - Attachment/CID and base64 inline image paths were exercised with local fixtures. Remote image URLs/scripts were not executed or fetched.
 - Today's read and unread messages were included; previous/future days and outgoing/system folders were excluded without changing read flags.
@@ -45,15 +53,15 @@
 ## Portable release
 
 - Portable build completed with the headless browser and local English/Thai OCR engine under _internal.
-- The actual packaged EXE passed all twelve offline checks, including native browser pagination, OCR recognition, two concurrent browsers, durable queue timing/cooldowns, copy repair, final-name-only publication and current body matching/routing.
+- The actual packaged EXE passed all thirteen offline checks, including delayed/busy/stalled page handling, reverse delivery after rows disappear, native browser pagination, OCR recognition, two concurrent browsers, durable queue timing/cooldowns, copy repair, final-name-only publication and body matching/routing.
 - The actual packaged GUI passed and Settings was visually inspected: three English tabs, independent Show password controls, Stop preserving the queue, four sample queue states, 120-second delay, read-mail policy, automatic-start trigger, history search and readable details.
 - Reports are linked to the tested EXE by SHA-256. No real mailbox or KDE portal was contacted.
 
-Verified EXE SHA-256: `aa17d9d983cd73b7937dadf737b4226745869569f71f26e6582e1e11be09f75b`
+Verified EXE SHA-256: `4f5f95d7e276f1c5482d4ec7f8e76d3ec3ca94c7e8889350b65e62bd58b747a2`
 
 Verified release folder: `portable`.
 
-The verified 3.2.3 bundle replaces 3.2.2 at `portable`. Only EXE, _internal and Quick start.md are distributed. Local settings, cached sources, shared history and business files are preserved.
+The verified 3.2.4 bundle replaces 3.2.3 at `portable`. Only EXE, _internal and Quick start.md are distributed. Local settings, cached sources, shared history and business files are preserved.
 
 ## Deployment boundary
 

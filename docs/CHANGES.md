@@ -1,4 +1,15 @@
-# KDE Bot Download V3 — 3.2.3
+# KDE Bot Download V3 — 3.2.4
+
+- Integrate the reviewed supplied paging patch: read table rows in one browser call and deliver while returning from the last portal page to the earliest selected page.
+- Require stable changed file rows instead of networkidle and a fixed 1.5-second pause; ignore loading/busy states and fail explicitly when navigation does not complete.
+- Preserve Stop cancellation and allow safe return from a page emptied by completed downloads.
+- Refresh the filename, date and size at the current row index before each download, including when previous downloads remove or reorder rows.
+- Keep the full catalogue check, account/date/number guards, global ambiguity refusal, email FIFO, two attempts, 120-second delay and no-overwrite publication.
+- Add unit and actual offline-browser checks for loading placeholders, stalled navigation, reverse traversal, emptied pages and moved rows. Retain the existing clean portable layout and GUI.
+
+Short commit message: perf: speed up verified KDE paging
+
+## 3.2.3
 
 - Fix diagnostic launch paths containing PowerShell's Microsoft.PowerShell.Core\\FileSystem:: prefix before pathlib parses them, preserving UNC double backslashes.
 - Apply the conversion to self-check reports, GUI screenshots and GUI reports. Reject empty or unsupported provider paths before any application or filesystem work begins.

@@ -1,5 +1,23 @@
 # KDE 3.2 data flow and changed functions
 
+## 3.2.4 reviewed performance patch
+
+The supplied speed_fixes.patch, workflow.py, test_agent_workflow.py and CHANGES.md were compared with 3.2.3. The patch matched both supplied Python files. Bulk table reads and reverse delivery were retained; three readiness/click hazards were corrected before release:
+
+- The supplied wait returned without an error on timeout, allowing the caller to treat an unchanged page as successfully loaded. Timeout now raises a clear error; Stop returns cancellation.
+- Two equal text readings could accept a loading placeholder. Readiness now requires complete file columns, no declared aria-busy ancestor, and 450 ms of stable changed row data. Empty/loading/old states reset the stability period. Configured/caller timeouts are respected. Only backward navigation can use a genuinely empty table as its starting state after files have disappeared; the destination still requires ready file rows.
+- Cached row positions could become stale after a download removed/reordered a row. The requested filename, timestamp and size are rechecked in a fresh bulk snapshot before every file action.
+
+| File | Functions | Change |
+|---|---|---|
+| workflow.py | _table_signature, _wait_table_change, _click_page_button | One-call readiness signatures; changed/stable file rows; explicit timeout/read failures; Stop cancellation |
+| workflow.py | _next_page, _previous_page, _has_next_page | Shared button selectors and verified navigation without networkidle or a fixed 1.5-second pause |
+| workflow.py | _table_rows | One evaluate_all call per row snapshot, original row indexes retained, legacy reader fallback on unsupported calls |
+| workflow.py | _download_visible_pages | Complete catalogue first; deliver backward only as far as the earliest selected page; refresh selected rows before each action |
+| selfcheck.py | check_portal_paging, run_self_check | Real offline browser with background polling, 750 ms loading placeholders, emptied pages, moved row indexes, stalled navigation and Stop |
+
+The reverse delivery pass changes file order within one request; durable email FIFO per account, 120-second delay, exactly two attempts, account/date/number matching, global ambiguity checks, and no-overwrite final publication remain in place. Login navigation is unchanged. The clean portable layout, English GUI, icon, Show password and Stop controls are retained. No supplied scratch copies are placed in the project root.
+
 ## 3.2.3 changed functions
 
 | File | Functions | Change |

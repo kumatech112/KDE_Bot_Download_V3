@@ -334,3 +334,152 @@ def test_old_day_pending_save_does_not_invisibly_block_new_day_work(tmp_path):
     scoped.ingest([message("today")], 200)
     assert scoped.claim_ready(320, set())["account-0"][0]["id"] != job["id"]
     assert scoped.jobs[job["id"]]["status"] == "expired"
+
+
+def test_download_pass_walks_back_only_to_the_page_with_a_selected_file(tmp_path):
+    filename = "A1015_PAYMENT_ONLINE_67097_16102026.zip.gpg"
+    pages = [["first-page.gpg"], [filename], ["last-page.gpg"]]
+    engine, cursor, events = catalog_engine(tmp_path, [filename], pages)
+    reads, moves, calls = [], [], []
+    original_rows = engine._table_rows
+    engine._table_rows = lambda page: (reads.append(cursor[0]), original_rows(page))[1]
+    original_next, original_previous = engine._next_page, engine._previous_page
+    engine._next_page = lambda *a: (moves.append("next"), original_next(*a))[1]
+    engine._previous_page = lambda *a: (moves.append("previous"), original_previous(*a))[1]
+
+    def handle(_page, row_index, row, _account, _timeout):
+        calls.append((cursor[0], row["filename"]))
+        return "complete"
+    engine.handle_file = handle
+    result = engine._download_visible_pages(None, engine.settings.accounts[0], 1000, engine.jobs[0]["lookup"])
+    assert calls == [(1, filename)] and result["downloaded"] == 1
+    # Two forward moves to catalogue, one backward move to page 2 of 3; never back to page 1.
+    assert moves == ["next", "next", "previous"]
+    # Catalogue reads every page once; the delivery pass reads only the page holding the file.
+    assert reads == [0, 1, 2, 1]
+
+
+class TablePage:
+    """Minimal Playwright-like page: tbody text sequence and an evaluate_all payload."""
+
+    def __init__(self, texts=("",), cells=None):
+        self.texts, self.cells, self.seen = list(texts), cells or [], 0
+        self.elapsed = 0
+        self.evaluations = 0
+        self.clicks = 0
+
+    def locator(self, _selector):
+        return self
+
+    @property
+    def first(self):
+        return self
+
+    def inner_text(self, timeout=0):
+        text = self.texts[min(self.seen, len(self.texts) - 1)]
+        self.seen += 1
+        return text
+
+    def evaluate_all(self, _script):
+        self.evaluations += 1
+        return self.cells
+
+    def evaluate(self, _script, arg=None, timeout=0):
+        return self.inner_text(timeout=timeout)
+
+    def wait_for_timeout(self, milliseconds):
+        self.elapsed += milliseconds / 1000
+
+    def count(self):
+        return 1
+
+    def is_enabled(self):
+        return True
+
+    def click(self, **_kwargs):
+        self.clicks += 1
+
+
+def test_page_change_wait_returns_when_new_table_text_is_stable(tmp_path):
+    engine, _cursor, _events = catalog_engine(tmp_path, ["x"], [["x"]])
+    page = TablePage(texts=["old", "old", "new", "new", "new"])
+    with patch("kde_bot.workflow.time.monotonic", side_effect=lambda: page.elapsed):
+        assert engine._wait_table_change(page, "old")
+    assert page.elapsed >= 0.65 and page.seen >= 6
+
+
+def test_table_rows_are_read_in_one_call_and_keep_original_indexes(tmp_path):
+    engine, _cursor, _events = catalog_engine(tmp_path, ["x"], [["x"]])
+    page = TablePage(cells=[["1", "a.gpg", "16-10-2026 10:00", "1 KB"],
+                            ["2", "", "t", "s"],
+                            ["too", "short"],
+                            ["4", "b.gpg", "16-10-2026 11:00", "2 KB", "extra"]])
+    assert StructuredDownloader._table_rows(engine, page) == [
+        (0, {"no": "1", "filename": "a.gpg", "file_time": "16-10-2026 10:00", "size_text": "1 KB"}),
+        (3, {"no": "4", "filename": "b.gpg", "file_time": "16-10-2026 11:00", "size_text": "2 KB"}),
+    ]
+    assert page.evaluations == 1
+
+
+@pytest.mark.parametrize("reset", ["old", ""])
+def test_transient_table_change_must_settle_after_old_or_empty_rows(tmp_path, reset):
+    engine, _cursor, _events = catalog_engine(tmp_path, ["x"], [["x"]])
+    page = TablePage(texts=["old", "partial", "partial", reset, "full", "full"])
+    with patch("kde_bot.workflow.time.monotonic", side_effect=lambda: page.elapsed):
+        assert engine._wait_table_change(page, "old")
+    assert page.elapsed >= 0.85
+
+
+def test_stalled_page_click_fails_instead_of_claiming_the_next_page_loaded(tmp_path):
+    engine, _cursor, _events = catalog_engine(tmp_path, ["x"], [["x"]])
+    page = TablePage(texts=["old"])
+    with patch("kde_bot.workflow.time.monotonic", side_effect=lambda: page.elapsed):
+        with pytest.raises(RuntimeError, match="incomplete catalogue"):
+            StructuredDownloader._next_page(engine, page, 500)
+    assert page.clicks == 1 and page.elapsed <= 0.6
+
+
+def test_unreadable_current_table_does_not_start_navigation(tmp_path):
+    engine, _cursor, _events = catalog_engine(tmp_path, ["x"], [["x"]])
+    page = TablePage(texts=[""])
+    with pytest.raises(RuntimeError, match="unverified navigation"):
+        StructuredDownloader._next_page(engine, page, 500)
+    assert page.clicks == 0
+
+
+def test_stop_cancels_page_wait_and_prevents_another_click(tmp_path):
+    engine, _cursor, _events = catalog_engine(tmp_path, ["x"], [["x"]])
+    page = TablePage(texts=["old"])
+    def stop_after_wait(milliseconds):
+        page.elapsed += milliseconds / 1000
+        engine.stop_event.set()
+    page.wait_for_timeout = stop_after_wait
+    with patch("kde_bot.workflow.time.monotonic", side_effect=lambda: page.elapsed):
+        assert engine._wait_table_change(page, "old") is False
+    assert StructuredDownloader._next_page(engine, page, 500) is False
+    assert page.clicks == 0
+
+
+def test_bulk_table_read_failure_preserves_legacy_fallback(tmp_path):
+    engine, _cursor, _events = catalog_engine(tmp_path, ["x"], [["x"]])
+    page = TablePage()
+    expected = [(0, {"filename": "expected.gpg"})]
+    with patch.object(page, "evaluate_all", side_effect=RuntimeError("Unsupported table call")), \
+            patch.object(core.KdeDownloader, "_table_rows", return_value=expected) as fallback:
+        assert StructuredDownloader._table_rows(engine, page) == expected
+    fallback.assert_called_once_with(page)
+
+
+def test_second_download_uses_fresh_row_index_after_first_file_disappears(tmp_path):
+    names = ["A1015_PAYMENT_ONLINE_67097_16102026.zip.gpg", "A1015_TSS_REVIEW_16102026.zip.gpg"]
+    pages = [names.copy()]
+    engine, cursor, _events = catalog_engine(tmp_path, names, pages)
+    calls = []
+    def handle(_page, row_index, row, _account, _timeout):
+        assert pages[cursor[0]][row_index] == row["filename"]
+        calls.append(row["filename"])
+        pages[cursor[0]].pop(row_index)
+        return "complete"
+    engine.handle_file = handle
+    result = engine._download_visible_pages(None, engine.settings.accounts[0], 1000, engine.jobs[0]["lookup"])
+    assert calls == names and result["downloaded"] == 2

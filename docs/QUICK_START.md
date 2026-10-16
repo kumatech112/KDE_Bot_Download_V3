@@ -1,4 +1,4 @@
-# KDE Download 3.2.3
+# KDE Download 3.2.4
 
 Open **KDE Bot Download V3.exe**. Keep **_internal** beside it. Python and a separate OCR installation are not required.
 
@@ -28,6 +28,8 @@ New qualifying mail waits **two minutes from discovery**. Each account processes
 No queued work means no KDE login. Each request gets **two attempts total**. A busy user or login failure waits five minutes before its second attempt. Missing/download failures retry in a fresh session after logout. After two failures, the request stops; new mail does not reset its budget. Closing/reopening retains attempts and processed IDs. Older-day waiting work expires instead of opening KDE automatically.
 
 ## Images and matching
+
+The complete portal catalogue is checked first, then requested files are downloaded while returning through the pages. Files on later pages can arrive first within a request; email requests retain their per-account queue order. If a page never finishes loading or does not change, the app reports an error instead of assuming navigation succeeded.
 
 The current email body can name a complete file or just its business words. A clear file/download instruction takes priority over an unrelated subject. For example, `1015` plus `Pre payment online 67097` can identify the file even without its full name. If no company keyword is present, the same business words are still checked. A company keyword alone never downloads anything.
 

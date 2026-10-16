@@ -29,6 +29,11 @@ STEPS = {
     5: "Check files", 6: "Download", 7: "Save", 8: "Logout",
 }
 
+PAGE_NEXT = ("button[aria-label='Go to next page']", "button[title='Go to next page']",
+             "button[aria-label*='next']")
+PAGE_PREVIOUS = ("button[aria-label='Go to previous page']", "button[title='Go to previous page']",
+                 "button[aria-label*='previous']")
+
 
 def selected_folders(settings: dict[str, Any], account: dict[str, Any]) -> list[Path]:
     """Both accounts publish directly into the shared configured roots."""
@@ -105,23 +110,84 @@ class StructuredDownloader(core.KdeDownloader):
                 self.row_jobs.setdefault(row_index, set()).add(job["id"])
         return selected, ambiguous
 
-    def _previous_page(self, page, timeout_ms):
-        for selector in ("button[aria-label='Go to previous page']", "button[title='Go to previous page']",
-                         "button[aria-label*='previous']"):
+    def _table_signature(self, page, allow_empty=False) -> str:
+        try:
+            return page.locator("tbody").first.evaluate("""(body, allowEmpty) => {
+                if (body.closest('[aria-busy="true"]')) return '';
+                const rows = Array.from(body.querySelectorAll('tr')).map(row =>
+                    Array.from(row.querySelectorAll('td')).map(cell => (cell.innerText || '').trim()));
+                if (!rows.length) return allowEmpty ? '[]' : '';
+                if (rows.some(values => values.length < 4 || !values[1])) return '';
+                return JSON.stringify(rows.map(values => values.slice(0, 4)));
+            }""", arg=allow_empty, timeout=2000)
+        except Exception:
+            return ""
+
+    def _wait_table_change(self, page, before: str, timeout_ms=None) -> bool:
+        limit = self.settings.page_timeout_seconds
+        if timeout_ms is not None:
+            limit = min(limit, max(0, timeout_ms) / 1000)
+        deadline = time.monotonic() + limit
+        last = None
+        stable_since = None
+        while time.monotonic() < deadline and not self.stop_event.is_set():
+            current = self._table_signature(page)
+            now = time.monotonic()
+            if current and current != before:
+                if current != last:
+                    last = current
+                    stable_since = now
+                elif now - stable_since >= 0.45:
+                    return True
+            else:
+                last = None
+                stable_since = None
+            page.wait_for_timeout(100)
+        if self.stop_event.is_set():
+            return False
+        raise RuntimeError("Portal table did not change and settle after navigation; refusing an incomplete catalogue.")
+
+    def _click_page_button(self, page, selectors, timeout_ms) -> bool:
+        if self.stop_event.is_set():
+            return False
+        for selector in selectors:
             button = page.locator(selector)
             if button.count() and button.first.is_enabled():
+                before = self._table_signature(page, allow_empty=selectors == PAGE_PREVIOUS)
+                if not before:
+                    raise RuntimeError("Cannot read the current portal table; refusing unverified navigation.")
                 button.first.click(timeout=timeout_ms)
-                self._wait_network(page)
-                page.wait_for_timeout(1500)
+                return self._wait_table_change(page, before, timeout_ms)
+        return False
+
+    def _next_page(self, page, timeout_ms):
+        return self._click_page_button(page, PAGE_NEXT, timeout_ms)
+
+    def _previous_page(self, page, timeout_ms):
+        return self._click_page_button(page, PAGE_PREVIOUS, timeout_ms)
+
+    def _has_next_page(self, page):
+        for selector in PAGE_NEXT:
+            button = page.locator(selector)
+            if button.count() and button.first.is_enabled():
                 return True
         return False
 
-    def _has_next_page(self, page):
-        for selector in ("button[aria-label='Go to next page']", "button[title='Go to next page']", "button[aria-label*='next']"):
-            button = page.locator(selector)
-            if button.count() and button.first.is_enabled():
-                return True
-        return False
+    def _table_rows(self, page):
+        """Read every row in one browser call instead of one call per cell."""
+        self.stage = 4
+        try:
+            data = page.locator("tbody tr").evaluate_all(
+                "rows => rows.map(row => Array.from(row.querySelectorAll('td'))"
+                ".map(cell => (cell.innerText || '').trim()))")
+        except Exception:
+            return super()._table_rows(page)
+        rows = []
+        for index, values in enumerate(data):
+            if len(values) >= 4 and values[1]:
+                rows.append((index, {"no": values[0], "filename": values[1],
+                                     "file_time": values[2], "size_text": values[3]}))
+        return rows
 
     def _download_visible_pages(self, page, account, timeout_ms, allowed_filenames=None):
         if not self.jobs:
@@ -130,6 +196,7 @@ class StructuredDownloader(core.KdeDownloader):
         catalogue = []
         positions = {}
         pages = 0
+        # Pass 1: catalogue every page once, so a reference can never silently pick one of several files.
         for page_number in range(self.settings.max_pages):
             if self.stop_event.is_set():
                 return result
@@ -143,6 +210,8 @@ class StructuredDownloader(core.KdeDownloader):
             if page_number + 1 == self.settings.max_pages:
                 raise RuntimeError("Portal page limit reached before a complete match check; no files downloaded. Increase the page limit.")
             if not self._next_page(page, timeout_ms):
+                if self.stop_event.is_set():
+                    return result
                 raise RuntimeError("Portal pagination changed during matching; no files downloaded.")
         selected, ambiguous = self._select_page_mail_matches(catalogue, allowed_filenames or {})
         matched_jobs = {identifier: set(self.row_jobs.get(identifier, set())) for identifier in selected}
@@ -151,34 +220,38 @@ class StructuredDownloader(core.KdeDownloader):
                                account.label, persist=True)
         if not selected:
             return result
-        for _ in range(pages - 1):
-            if self.stop_event.is_set():
-                return result
-            if not self._previous_page(page, timeout_ms):
-                raise RuntimeError("Cannot return to the first portal page safely; no files downloaded.")
+        # Deliver on the way back; skip full row reads on pages with no requested files.
+        wanted = {positions[identifier][0] for identifier in selected}
+        lowest = min(wanted)
         rows_by_id = dict(catalogue)
-        for page_number in range(pages):
+        for page_number in range(pages - 1, lowest - 1, -1):
             if self.stop_event.is_set():
                 break
-            current_rows = self._table_rows(page)
-            for identifier, detail in selected.items():
-                if positions[identifier][0] != page_number:
-                    continue
-                expected = rows_by_id[identifier]
-                matches = [(index, row) for index, row in current_rows
-                           if row.get("filename") == expected.get("filename")
-                           and row.get("file_time", "") == expected.get("file_time", "")
-                           and row.get("size_text", "") == expected.get("size_text", "")]
-                if len(matches) != 1:
-                    raise RuntimeError("Portal list changed after matching; refusing to click a different file.")
-                row_index, row = matches[0]
-                self.row_jobs = {row_index: matched_jobs[identifier]}
-                self.reporter.emit(4, "stage_complete", "Matched email evidence, account and business date", account.label, row["filename"])
-                status = self.handle_file(page, row_index, row, account, timeout_ms)
-                result["downloaded" if status == "complete" else "skipped" if status == "skipped" else "errors"] += 1
-                if self.stop_event.wait(self.settings.download_delay_seconds):
+            if page_number in wanted:
+                for identifier, detail in selected.items():
+                    if positions[identifier][0] != page_number:
+                        continue
+                    if self.stop_event.is_set():
+                        return result
+                    # A completed download can remove or reorder other rows.
+                    current_rows = self._table_rows(page)
+                    expected = rows_by_id[identifier]
+                    matches = [(index, row) for index, row in current_rows
+                               if row.get("filename") == expected.get("filename")
+                               and row.get("file_time", "") == expected.get("file_time", "")
+                               and row.get("size_text", "") == expected.get("size_text", "")]
+                    if len(matches) != 1:
+                        raise RuntimeError("Portal list changed after matching; refusing to click a different file.")
+                    row_index, row = matches[0]
+                    self.row_jobs = {row_index: matched_jobs[identifier]}
+                    self.reporter.emit(4, "stage_complete", "Matched email evidence, account and business date", account.label, row["filename"])
+                    status = self.handle_file(page, row_index, row, account, timeout_ms)
+                    result["downloaded" if status == "complete" else "skipped" if status == "skipped" else "errors"] += 1
+                    if self.stop_event.wait(self.settings.download_delay_seconds):
+                        return result
+            if page_number > lowest and not self._previous_page(page, timeout_ms):
+                if self.stop_event.is_set():
                     return result
-            if page_number + 1 < pages and not self._next_page(page, timeout_ms):
                 raise RuntimeError("Portal pagination changed before delivery finished.")
         return result
 
@@ -248,10 +321,6 @@ class StructuredDownloader(core.KdeDownloader):
         response = super()._post_auth(path, payload, referer)
         response.raise_for_status()
         return response
-
-    def _table_rows(self, page):
-        self.stage = 4
-        return super()._table_rows(page)
 
     def _bundled_headless_shell_path(self) -> Path:
         if getattr(sys, "frozen", False):

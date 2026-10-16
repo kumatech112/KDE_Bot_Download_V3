@@ -106,6 +106,84 @@ def check_portal_catalogue(root: Path) -> None:
             browser.close()
 
 
+def check_portal_paging(root: Path) -> None:
+    """Exercise delayed tables, reverse delivery and failed navigation offline."""
+    from .legacy_core import sync_playwright_without_console
+    from .workflow import StructuredDownloader, make_engine_settings
+    from . import legacy_core as core
+    settings = default_settings()
+    settings["accounts"][0]["username"] = "offline-paging-pre"
+    settings["download_delay_seconds"] = 0
+    settings["max_pages"] = 3
+    logs = root / "paging-logs"
+    logs.mkdir()
+    history = History(logs)
+    reporter = Reporter(history, lambda _event: None)
+    engine = StructuredDownloader(make_engine_settings(settings, root / "paging.json"), reporter,
+                                  Delivery(history, reporter), settings, threading.Event())
+    names = ["A1015_PAYMENT_ONLINE_67097_16102026.zip.gpg", "A1015_TSS_REVIEW_16102026.zip.gpg",
+             "A1015_TSS_DOCUMENT_16102026.zip.gpg"]
+    lookup = {core.normalize_filename_for_match(name): name for name in names}
+    engine.jobs = [{"id": "offline-paging-job", "account": "offline-paging-pre", "lookup": lookup,
+                    "received": "2026-10-16T10:00:00", "work_date": "2026-10-16"}]
+    pages = [["A1015_FIRST_16102026.zip.gpg"], names[:2], names[2:]]
+    with sync_playwright_without_console(lambda _message: None) as playwright:
+        browser = playwright.chromium.launch(**engine._browser_launch_kwargs())
+        try:
+            page = browser.new_page()
+            # Every request is fulfilled locally; no production service is contacted.
+            page.route("**/*", lambda route: route.fulfill(status=200, body="ok", headers={"access-control-allow-origin": "*"}))
+            page.set_content("""<table><tbody></tbody></table>
+                <button id='previous' aria-label='Go to previous page' onclick='turn(-1)'>Previous</button>
+                <button id='next' aria-label='Go to next page' onclick='turn(1)'>Next</button>
+                <script>window.pages=""" + json.dumps(pages) + """;window.pageIndex=0;window.moves=[];window.stall=false;window.polls=0;
+                function render(){document.querySelector('tbody').innerHTML=window.pages[window.pageIndex].map((name,index)=>
+                '<tr><td>'+(index+1)+'</td><td>'+name+'</td><td>16/10/2026</td><td>1 MB</td></tr>').join('');
+                document.querySelector('table').setAttribute('aria-busy','false');
+                document.querySelector('#previous').disabled=window.pageIndex===0;
+                document.querySelector('#next').disabled=window.pageIndex===2;}
+                function turn(delta){if(window.stall)return;window.moves.push(delta>0?'next':'previous');window.pageIndex+=delta;
+                document.querySelector('tbody').innerHTML='<tr><td>Loading</td></tr>';setTimeout(render,750);}
+                setInterval(()=>{window.polls++;fetch('https://kde-offline.invalid/poll').catch(()=>{});},100);render();</script>""")
+            reads = []
+            original_rows = engine._table_rows
+            def read_rows(current_page):
+                reads.append(current_page.evaluate("window.pageIndex"))
+                return original_rows(current_page)
+            engine._table_rows = read_rows
+            clicked = []
+            def handle(current_page, row_index, row, _account, _timeout):
+                actual = current_page.locator("tbody tr").nth(row_index)
+                assert actual.locator("td").nth(1).inner_text() == row["filename"]
+                clicked.append(row["filename"])
+                actual.evaluate("row => row.remove()")
+                return "complete"
+            with patch.object(engine, "handle_file", side_effect=handle), \
+                    patch.object(engine, "_wait_network", side_effect=AssertionError("Paging must not wait for network idle")):
+                result = engine._download_visible_pages(page, engine.settings.accounts[0], 5000, lookup)
+            assert result["downloaded"] == 3 and clicked == [names[2], names[0], names[1]]
+            assert reads == [0, 1, 2, 2, 1, 1]
+            assert page.evaluate("window.moves") == ["next", "next", "previous"]
+            assert page.evaluate("window.polls") > 0
+            page.evaluate("render();document.querySelector('table').setAttribute('aria-busy','true')")
+            assert engine._table_signature(page) == ""
+            page.evaluate("document.querySelector('table').setAttribute('aria-busy','false');window.stall=true")
+            try:
+                engine._next_page(page, 500)
+            except RuntimeError as error:
+                assert "incomplete catalogue" in str(error)
+            else:
+                raise AssertionError("Unchanged table was accepted as a new page")
+            timer = threading.Timer(0.2, engine.stop_event.set)
+            timer.start()
+            try:
+                assert engine._next_page(page, 5000) is False
+            finally:
+                timer.join()
+        finally:
+            browser.close()
+
+
 def check_agent_features(root: Path) -> None:
     from PIL import Image, ImageDraw, ImageFont
     from .evidence import LocalOCR, MailEvidenceReader, reference_lookup, today
@@ -405,6 +483,8 @@ def run_self_check(output: Path) -> int:
             result["checks"].append("Actual bundled English/Thai OCR reads a sample screenshot; strict FIFO, two-minute delay, busy-user retry and final-filename-only publication passed offline")
             check_portal_catalogue(root)
             result["checks"].append("Actual offline browser: previous/next pagination, cross-page ambiguity rejection and precise-reference precedence before any click")
+            check_portal_paging(root)
+            result["checks"].append("Actual offline browser: delayed tables with background polling, shorter reverse delivery, fresh row indexes, stalled navigation refusal and Stop cancellation")
             check_body_instructions(root)
             result["checks"].append("Body instructions: 1015 fallback, generic account templates, unknown-date placeholders, legal-type numbers and monthly filenames; foreign company and company-only references rejected")
         result["status"] = "passed"
