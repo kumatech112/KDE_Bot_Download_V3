@@ -140,7 +140,7 @@ def test_settings_migration_disables_old_portal_timer_policy():
     migrated = normalize_settings(old)
     assert migrated["mail_watch"]["enabled"]
     assert "busy_wait_seconds" not in migrated and "loop_wait_seconds" not in migrated
-    assert migrated["mail_delay_seconds"] == 70 and migrated["max_session_attempts"] == 2
+    assert migrated["mail_delay_seconds"] == 270 and migrated["max_session_attempts"] == 2
     assert migrated["mail_watch"]["today_only"] and not migrated["mail_watch"]["unread_only"]
 
 

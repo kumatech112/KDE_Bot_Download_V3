@@ -222,7 +222,7 @@ class History:
             for username, job in daily["jobs"].items():
                 if (not isinstance(job, dict) or job.get("account") != username
                         or job.get("status") not in {"waiting", "running", "complete", "deferred", "review", "expired"}
-                        or not isinstance(job.get("attempts"), int) or not 0 <= job["attempts"] <= 2
+                        or not isinstance(job.get("attempts"), int) or job["attempts"] < 0
                         or not isinstance(job.get("due"), (int, float)) or not math.isfinite(job["due"])
                         or not all(isinstance(job.get(field), str) for field in ("id", "account", "label", "work_date"))):
                     raise ValueError("Invalid daily account queue; original data preserved.")
@@ -290,6 +290,7 @@ class Reporter:
         self.counts = {"complete": 0, "skipped": 0, "copy_pending": 0, "error": 0}
         self.secrets: list[str] = []
         self.file_key = record_key
+        self.language = "en"
         self.activity_last: dict[tuple[str, str, int], list[Any]] = {}
 
     def redact(self, text: Any) -> str:
@@ -306,6 +307,9 @@ class Reporter:
     def _emit(self, step: int, status: str, reason: str, account: str = "",
              filename: str = "", destination: str = "", persist: bool = False,
              sha256: str = "", count: bool = False) -> dict[str, Any]:
+        if self.language == "th":
+            from .language import thai_text
+            reason = thai_text(reason)
         key = self.file_key(account, filename) if filename else f"stage:{account}:{step}"
         previous = self.history.data["outcomes"].get(key, {})
         previous_status = previous.get("signature", [None, None])[1]
@@ -367,6 +371,9 @@ class Delivery:
     def record_identifier(self, account: str, filename: str) -> str:
         return record_key(account, filename)
 
+    def existing_source(self, available: list[Path]) -> Path | None:
+        return available[0] if available else None
+
     def index(self, folder: Path, refresh: bool = False) -> dict[str, list[Path]]:
         with self.index_lock:
             return self._index(folder, refresh)
@@ -423,7 +430,7 @@ class Delivery:
             if local_source:
                 source = local_source
             elif available:
-                source = available[0]
+                source = self.existing_source(available)
             else:
                 for folder in recovery_folders or []:
                     if folder.is_dir():

@@ -1,4 +1,17 @@
-# KDE Bot Download V3 — 3.4.0
+# KDE Bot Download V3 — 3.5.0
+
+- Fix the reported complete-catalogue page-limit failure by replacing the daily reverse/catalogue pass with forward, page-at-a-time downloads. Preserve completed files on later navigation errors.
+- Set and verify 30 rows using native or Material-style controls. Support the observed Thai pagination label/range; return to the first page, refresh rows after each file and stop on unchanged/repeated pages.
+- Use only today's visible KDE date column; blank/unreadable dates no longer infer a date from the filename.
+- Change new-mail delay to 270 seconds. Process accounts sequentially in one browser worker. Retry busy/unavailable logins every 60 seconds until available or Stop; preserve counts above two across restart.
+- Return to new-mail waiting after success/empty scans. Successful work restores a queued next round's 270-second cooldown. File/navigation failures wait for the next new-mail/manual round.
+- Make .97 required and the sole already-downloaded reference. Save .97 first; optionally copy .243. A .243-only file does not skip or supply stale bytes to a normal download. Preserve all existing files on content conflict.
+- Translate controls, statuses, history/details and common engine errors to Thai with a readable Thai font. Retain Show password, Stop, supplied icon, three tabs and compact shared history.
+- Add a 77-row/30-per-page browser regression with old max_pages=1, native/custom control cases, removed/refilled rows and first-page preservation on navigation stall. Test sequential ordering, unlimited login cooldown, successful reset, .97-only tracking and .243 non-overwrite.
+
+Short commit message: fix: restore sequential Thai KDE page downloads
+
+## 3.4.0
 
 - Replace production keyword/OCR selection with a metadata-only arrival trigger for the configured data mailbox and incoming folders.
 - Wait a fixed 70 seconds; coalesce arrivals without extending the pending deadline. Continue detecting arrivals while a round runs, queueing another round.

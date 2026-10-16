@@ -1,51 +1,40 @@
-# KDE Download — 3.4.0
+# KDE Download — 3.5.0
 
-A dedicated Windows KDE downloader with Monitor, History and Settings tabs. Open **portable\KDE Bot Download V3.exe** and keep **_internal** beside it. The browser is bundled; Python and OCR are not required on the deployment computer.
+Thai Windows GUI with การทำงาน (Monitor), ประวัติการทำงาน (History) and ตั้งค่า (Settings). Open **portable\KDE Bot Download V3.exe**; keep **_internal** beside it. The pinned browser is included. Python and OCR are not required on the deployment computer.
 
-## Daily download behavior
+## Current workflow
 
-- Watch today's incoming arrivals in the configured **data@tradeconnection.co.th** classic Outlook mailbox, including read messages. Only stable IDs and received times are read; subjects, bodies, attachments and images do not select files.
-- New arrivals open a fixed **70-second window**. Other arrivals join the open deadline without resetting it. New mail during a running round queues the next round.
-- Each round opens isolated sessions for both enabled KDE accounts. Download **all files dated today in Bangkok time**, regardless of company code, business words or file side.
-- Use the portal date column. If it is blank, an unambiguous filename date may supply the date. Unknown/unreadable dates are skipped and counted; earlier dates are excluded.
-- Before every download, check the exact Windows filename in **both destination roots**. A file present in either root is skipped; the app does not fill the other root automatically. Different extensions remain different files.
-- Download missing files locally and publish only final filenames into the selected destination(s). Never overwrite existing files or create business-folder probes, subfolders, logs or temporary sidecars.
-- A failed, empty or busy account gets **one retry after 60 seconds**, for two attempts total. The successful account is not reopened for the other's retry. After two failures, wait for another new mail arrival or Request download round.
-- No queued work means no KDE login. Invalid credentials require attention; the affected account stays paused during that monitor run. No account-wide reset or forced logout of another person.
-- Stop preserves consumed attempts and deadlines. At midnight, previous-day pending work expires. Historical matching requests remain in shared history but are not executed by this mode.
+- Watch new incoming IDs in the configured **data@tradeconnection.co.th** classic Outlook mailbox, including read mail. No subject/body/image/keyword matching or mail mutation.
+- New mail triggers a **270-second (4:30) wait**. Other arrivals join the same pending deadline. Mail during active work queues another round; after a successful account finishes, queued new-mail work waits at least another 270 seconds. No new mail means no idle browser loop.
+- Process accounts **sequentially: Pre, logout/close, then Post**. At most one browser account is active. A busy/unavailable login waits 60 seconds and retries until available or Stop. Known rejected credentials pause for correction.
+- Set the portal's rows-per-page control to **30**. Process today's files on the current page before advancing. Do not catalogue all pages or navigate backward before downloading.
+- Use only the visible KDE date column and today's Bangkok date. Blank/unreadable dates are excluded; no filename-date fallback.
+- Check already-downloaded filenames only in **\\10.0.0.97\Z Bot KDE**. Existing nonempty .97 files are skipped. .243-only presence does not count and does not supply stale content to a normal download.
+- Save new downloads in .97 first, then optionally copy to .243. Never overwrite existing files. A conflicting .243 copy is reported while the new .97 file remains available.
+- A successful empty scan returns to waiting for new mail. Download/navigation failures retain completed files and wait for another mail/manual round; only login availability retries every minute.
+- Keep compact shared state/monthly CSV, local DPAPI credentials/cache, exact filename history, graceful Stop and the supplied icon.
 
-See [Quick Start](docs/QUICK_START.md), [Function map](docs/ARCHITECTURE.md), [Changes](docs/CHANGES.md) and [Verification](docs/VERIFICATION.md).
+The reported RuntimeError was found in the shared log: the old complete-catalogue page limit stopped downloads before they began. The new forward page processor starts saving immediately, derives traversal room from pagination totals with a safe fallback, detects unchanged/repeated pages and preserves already-saved files on later errors. A regression reproduces 77 rows with the old max_pages=1 setting.
 
-## Default destinations
+## Destinations
 
 | Purpose | Folder |
 |---|---|
-| Original files | `\\10.0.0.243\pgp-data$` |
-| New files | `\\10.0.0.97\Z Bot KDE` |
+| Required download / existing-file reference | `\\10.0.0.97\Z Bot KDE` |
+| Optional additional copy | `\\10.0.0.243\pgp-data$` |
 | Shared history / queue | `\\10.0.0.97\Z Log\Log Bot KDE` |
 
-Choose original, new or both for new downloads. Both roots are always checked for existing filenames. They must already exist and be readable; the selected save locations must permit final-file creation. Windows/SMB permissions belong to the launching user and are not bypassed.
+Select .97 only, or .97 plus .243. The older original-only choice migrates to both so .97 remains authoritative. No business-folder tracker/probe/log/temp file or account folder is created. Only final downloaded files are saved there. Existing zero-byte files or conflicting content remain visible failures, never automatic overwrites.
 
-Local settings, DPAPI credentials and validated pending sources remain under `%LOCALAPPDATA%\KDE Bot Download V3`. The separate writable Log folder holds one shared state file, one CSV per month and a worker lock. Only one monitor may own that Log folder.
+Local settings, encrypted passwords and validated pending sources remain under `%LOCALAPPDATA%\KDE Bot Download V3`. The Log folder holds one schema-3 state, one CSV per month and the worker lock. One monitor may own that shared Log at a time.
 
-## Clean layout
+See the [Thai Quick Start](docs/QUICK_START.md), [function map](docs/ARCHITECTURE.md), [changes](docs/CHANGES.md) and [verification](docs/VERIFICATION.md).
 
-| Folder | Contents |
-|---|---|
-| portable | EXE, _internal, Quick start.md |
-| src | KDE application source |
-| tools | Build and verified promotion |
-| tests | Regression and daily-sweep checks |
-| docs | Setup, function map, changes and verification |
-| assets | Supplied icon |
+## Layout and development
 
-Git excludes passwords, runtime settings/logs, business files, raw mail/images and portable binaries. Unrelated applications are outside this project.
+The project contains portable, src, tools, tests, docs and assets. The portable contains only EXE, _internal and Quick start.md. Git excludes passwords, runtime settings/logs, business files, raw mail/images and portable binaries. Other applications are outside this project.
 
-## Development
-
-Use Windows, Python 3.13 and requirements.txt. The builder needs the pinned Playwright headless browser. `KDE_BUILD_HOME` selects a local build drive. No Tesseract runtime is bundled or used by the daily downloader.
-
-Retained source-only OCR regression fixtures need a developer-installed Tesseract. They are separate from the current daily runtime and its packaged offline checks.
+Use Windows, Python 3.13 and requirements.txt. The builder needs the pinned Playwright browser; KDE_BUILD_HOME selects a local build drive. Retained source-only OCR regression fixtures need developer-installed Tesseract; the current runtime and packaged checks do not use it.
 
     python -m compileall -q src tools tests
     python -m pytest tests -q -p no:cacheprovider

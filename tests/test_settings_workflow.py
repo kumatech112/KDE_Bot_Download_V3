@@ -178,4 +178,4 @@ def test_destination_preflight_never_opens_test_files_for_writing(tmp_path, monk
     for folder in destinations:
         assert {path.name for path in folder.iterdir()} == {"business-file.gpg"}
         assert (folder / "business-file.gpg").read_bytes() == b"preserve existing download"
-    assert any("save access is checked during real delivery" in event["reason"] for event in events)
+    assert any("ตรวจสิทธิ์บันทึกเมื่อดาวน์โหลดจริง" in event["reason"] for event in events)

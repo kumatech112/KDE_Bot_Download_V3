@@ -71,11 +71,12 @@ def main() -> int:
         if name.startswith("gui") and (report.get("version") != metadata["version"] or not report.get("gui_started") or report.get("mail_queue_rows", 0) < 1
                                        or report.get("activity_rows", 0) < 1 or report.get("fixed_step_checklist") is not False
                                        or not report.get("history_search_passed") or not report.get("readable_event_details")
-                                       or report.get("language") != "en" or report.get("tab_count") != 3
-                                       or not report.get("auto_start_passed") or report.get("mail_delay_seconds") != 70
+                                       or report.get("language") != "th" or report.get("tab_count") != 3
+                                       or not report.get("auto_start_passed") or report.get("mail_delay_seconds") != 270
                                        or report.get("download_policy") != "daily_all" or report.get("email_content_matching") is not False
-                                       or report.get("ocr_enabled") is not False or report.get("skip_either_destination") is not True
-                                       or report.get("busy_attempts_total") != 2
+                                       or report.get("ocr_enabled") is not False or report.get("tracker_source") != "new_dir"
+                                       or report.get("sequential_accounts") is not True or report.get("portal_rows_per_page") != 30
+                                       or report.get("page_by_page") is not True or report.get("login_retry_unlimited") is not True
                                        or not report.get("deferred_status_visible") or not report.get("busy_status_visible")
                                        or not report.get("password_toggle_passed") or not report.get("stop_control_passed")
                                        or not report.get("includes_read_mail") or not report.get("today_only")

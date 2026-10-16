@@ -1,57 +1,53 @@
-# KDE 3.4.0 data flow and function map
+# KDE 3.5.0 data flow and changed functions
 
-## Current data flow
+## Current flow
 
-Per-user settings / DPAPI → writable Log lock and read-only checks of both download roots → daily state recovery → local classic Outlook metadata scan of the configured data mailbox → deduplicate stable received-message IDs → fixed 70-second pending window → one daily round with up to two isolated source workers → full paginated KDE catalogue → today's portal-date rows only → exact filename check in both roots → skip if present in either, otherwise local download → validated exclusive final-file publication to selected root(s) → own-session logout → account success or one 60-second retry → wait for new mail/manual request after two failures.
+Per-user settings/DPAPI → shared Log lock → selected destination read-only checks → saved arrival/round recovery → today's incoming data-mailbox IDs → deduplication → pending 270-second trigger → Pre account → set 30 rows → verify current-page table → download today's rows and skip existing .97 names → advance and verify next page → logout/close → Post account with the same page flow → logout/close → idle until another new-mail/manual trigger.
 
-Normal production run_cycle calls run_daily_monitor. It does not call the old run_mail_monitor, MailQueue, SearchCoordinator, body matching or OCR. Historical matching code and its fixtures remain in source for regression/reference; old mail_jobs and prior CSV history remain preserved in state. No old keyword request is revived or executed by the daily path. The OCR runtime is no longer bundled. Only the shared browser/pagination/delivery infrastructure is reused.
+The user supplied the 30-row control and DD/MM/YYYY timestamp screenshots. Shared production CSV errors confirmed the old complete-catalogue page guard prevented all downloads. DailyDownloader now overrides the inherited catalogue traversal with portal_pages.download_pages; the older matcher/paging code remains only for retained helper regressions. No full catalogue or reverse walk gates daily downloads.
 
-## Trigger and account queue
+## Trigger and sequential ownership
 
-DailyQueue stores day, seen IDs, an absolute pending_due, sequence and the latest per-account round outcomes under daily_watch in the existing schema-3 KDE_State.json. No new runtime file/folder is introduced. New unseen incoming IDs open now+70 or join an earlier pending deadline. Subjects, bodies, sender names, attachment names and images are never read by the new scanner. Incoming read/unread messages count; outgoing/system folders and non-mail items do not. The user confirmed the whole configured data mailbox; optional relative folder_path defaults blank.
+One executor worker owns browser work. DailyQueue.claim returns one account at a time and preserves account order, including its 60-second login cooldown. The current source closes before the next starts. Outlook metadata polling continues in the monitor thread while the source worker runs.
 
-The monitor polls Outlook every 15 seconds by default and continues ingesting arrivals while workers run. Mail during active work queues the next round. Existing pending/retry deadlines are not extended by new mail. Only one round owns source sessions; it waits for both workers to finish before admitting another round. Source workers have isolated browsers and cookies. A successful source is not reopened for another source's retry.
+Each new incoming ID opens a 270-second window or joins the existing pending deadline. New mail during active work queues another round. A successful account raises an already-pending new-mail deadline to at least finish+270; it creates no new round by itself. Failed/busy logins remain waiting for finish+60 without a fixed attempt cap. Credentials rejected/locked pause for operator correction. Empty successful scans complete, and file/navigation failures defer until new mail rather than repeatedly reopening a successful login.
 
-Two attempts total means the initial source sweep plus one fresh-session retry after 60 seconds. Busy, empty, navigation, download and save failures use that same bounded budget. Busy attempts are no longer refunded and there are no availability probes or unlimited retries. Known credential rejection pauses that account during the monitor run, even if more mail arrives. Stop/restart retains consumed attempts. Correct Settings and restart before an explicit/new-mail round to revisit credentials. On a new Bangkok day, old pending work expires and the seen-ID set resets.
+Daily job attempts are nonnegative integers without the former two-attempt limit; legacy mail_jobs keep their old validation. Interrupted jobs preserve attempts/deadlines. Upgrade from flow 4 lengthens old pending trigger windows once and marks flow_version=5, so restarts do not repeatedly extend them. Midnight expires old work and resets the day's seen IDs. Existing queues/logs/credentials remain intact.
 
-## Date and filename identity
+## Page safety
 
-The visible KDE date column is authoritative. Valid YYYY-MM-DD / YYYY/MM/DD / DD-MM-YYYY / DD/MM/YYYY and Buddhist years are handled. A blank column can use exactly one dated filename day. A nonblank unreadable date is never bypassed with a filename guess. Other dates and undated rows are counted as date skips. There is no company/business-side/word/extension filter on today's rows.
+The page-size adapter scopes native select or Material/MUI combobox controls inside the paginator or the observed Thai rows-per-page label. It selects and verifies 30, returns to the first page when required, and waits for complete stable rows. Native and custom option fixtures are exercised.
 
-DailyDelivery uses exact Windows filenames for existing files, delivery records and outcome keys. Names with different extensions or business numbers do not collapse to the old business equivalence identity. The Windows/SMB stat is fresh before every file; skipped files do not incur the configured between-download delay. Local shared filename locks serialize competing workers; exclusive final-file creation prevents overwrite by external publishers. Duplicate detection is filename presence, not a hash comparison of an already-present file.
+Each page downloads before a next-page click. Rows are re-read after every file so removals, refills and reordered indexes do not skip visible current-day files. A processed-name set avoids repeated file actions within the sweep. Navigation must produce changed, stable rows. Repeated page fingerprints stop the sweep. Pagination totals inform the traversal budget; a stale max_pages=1 cannot prevent the normal 77-row/three-page case. A safe fallback still guards unbounded or broken navigation. Partial successful downloads remain in .97 when later navigation fails.
 
-Missing files still use the established validated local staging, CREATE_NEW, reader exclusion and hash-verified publication. A midnight check runs immediately before download and after local completion; previous-day cache is discarded before publication. Publication already in progress finishes safely. Normal rounds skip when either root already holds a file. Explicit Repair pending saves may finish the other selected root using cached/verified content without a portal session; it uses the daily exact record key for daily records.
+The date column is authoritative; valid Gregorian/Buddhist YYYY-MM-DD, YYYY/MM/DD, DD-MM-YYYY and DD/MM/YYYY dates are compared with Bangkok today. Blank/unreadable dates never fall back to filenames. Each file is rechecked at the download boundary and a local download crossing midnight is discarded before publication.
+
+## .97 file authority
+
+Daily handle_file checks only new_dir for an existing exact Windows filename. .97 is always first in daily_folders; original_dir is optional. Legacy original-only settings migrate to both. Presence only in .243 never skips a file and never supplies the source for a normal daily download. Cached validated download sources can still recover an interrupted save. The base delivery's existing-source selection has an overridable default so historical/explicit repair behavior is preserved.
+
+DailyDelivery obtains fresh KDE bytes when .97 is missing, publishes .97 first with CREATE_NEW/hash verification, then verifies/copies .243 without overwrite. Existing .97 files skip the optional copy too. A .243 conflict leaves today's .97 bytes intact and reports copy_pending. Explicit Repair pending saves may reuse validated local/existing content without a browser. No tracker/probe/log/temp/account directory is created in either business destination.
 
 ## Changed functions
 
 | File | Functions/classes | Change |
 |---|---|---|
-| daily_download.py | portal_day | Strict current portal-date parsing, conservative blank-date fallback |
-| daily_download.py | scan_arrivals, walk | Metadata-only incoming data mailbox scan, optional relative folder, stable IDs, read/unread, system/non-mail exclusions, clear folder errors |
-| daily_download.py | DailyDelivery.__init__, record_identifier, existing, index, _deliver | Exact filename keys; fresh stat; no business-name equivalence; separate extension histories; daily record marker for explicit repair |
-| daily_download.py | DailyDownloader.__init__, _select_page_mail_matches, handle_file, download_today | Reuse verified catalogue traversal; select all today's rows; no evidence reader; skip either-root presence; final-day checks; no idle skip delay |
-| daily_download.py | DailyQueue.__init__, roll_day, recover | Compact additive state; pending recovery; disabled-account handling; midnight expiry |
-| daily_download.py | DailyQueue.ingest, request_round, claim, finish, snapshot | Fixed 70-second window, durable deduplication, queued next round, initial plus one retry, credential pause and readable account results |
-| daily_download.py | run_daily_account, run_daily_monitor | Two isolated source workers, bounded outcomes, secret redaction, continued mailbox polling, Stop cleanup and final queue snapshot |
-| workflow.py | StructuredDownloader.__init__ | Optional evidence reader; disabled by the daily subclass |
-| workflow.py | StructuredDownloader._download_visible_pages | Policy-specific selection text; daily skipped files do not sleep; existing safe pagination/click checks retained |
-| workflow.py | make_engine_settings | Filter mail adapter fields; optional folder scope stays outside the legacy engine dataclass |
-| workflow.py | run_cycle | Read-only checks of both roots; route production to daily monitor; explicit repair only; metadata-only diagnostic scan; choose daily repair ledger |
-| storage.py | exact_record_key, Delivery.record_identifier, Delivery._deliver | Add exact-key policy hook while retaining the legacy delivery default |
-| storage.py | History.__init__, import_legacy | Validate additive daily state; preserve daily repair policy during imports |
-| storage.py | Reporter.__init__, _emit | Policy-selectable filename outcome key; separate same-stem completion events |
-| activity.py | read_activity | Optional exact-name replay for the daily GUI; historical timeline preserved |
-| settings.py | default_settings, normalize_settings, validate_settings | Force 70-second arrival delay, 60-second retry and two attempts; optional folder scope; preserve credentials and paths |
-| gui.py | build_controls, build_monitor, build_settings, advanced_settings | Replace image/review controls with Round details / Request download round; concise daily policy and optional folder scope |
-| gui.py | review_request, render_jobs, load_history, launch | Details-only dialog, result text, exact-name replay, six representative smoke states and new policy evidence |
-| selfcheck.py | check_arrival_metadata, check_daily_queue, check_daily_native_round, run_self_check | Fake COM metadata proof, durable timing/bounded retries, two real offline browser rounds, exact extensions and separate history; no OCR runtime requirement |
-| tools/build_portable.py | main | Remove OCR bundle/dependency; keep browser, supplied icon and three-item distribution |
-| tools/promote_portable.py | main | Require hash-linked packaged daily policy, 70 seconds, either-root skips, OCR/content matching disabled and bounded busy attempts |
+| portal_pages.py | pagination_scope, page_range, next_button | Locate observed paginator controls, Thai/English range totals and enabled next-page button |
+| portal_pages.py | wait_ready, set_page_size | Stable complete rows, first-page recovery, native/custom 30-row selection verification |
+| portal_pages.py | download_pages | Forward per-page downloads before navigation; fresh indexes; refill handling; current-day filter; repeated-page guard; partial-result preservation |
+| daily_download.py | portal_day, daily_folders | Remove filename-date inference; require .97 and optional .243 second |
+| daily_download.py | DailyDelivery.__init__, existing_source | Separate normal fresh-download source choice from explicit cached/existing save repair |
+| daily_download.py | DailyDownloader.__init__, _download_visible_pages, handle_file | Thai reporting; call page processor; .97-only duplicate detection; .97-first final publication |
+| daily_download.py | DailyQueue.__init__, recover, ingest, request_round, claim, finish, snapshot | Flow-5 migration, 270-second triggers, one account claim, unlimited 60-second login retry, successful cooldown reset, visible Thai states |
+| daily_download.py | run_daily_account, run_daily_monitor | Classify login failures separately from later file/navigation errors; one browser worker; no idle round after success |
+| storage.py | Delivery.existing_source, _deliver | Default-preserving source-selection hook |
+| storage.py | History.__init__ | Allow persisted daily login counts above two; legacy validation unchanged |
+| storage.py | Reporter.__init__, _emit | Optional Thai translation before existing redaction/history logic |
+| language.py | THAI, thai_text | Thai controls, retained-engine messages, counts and readable failure prefixes; preserve technical evidence |
+| workflow.py | run_cycle | Thai reporter; required .97/optional .243 preflight and daily explicit repair folders |
+| settings.py | default_settings, normalize_settings, validate_settings | 270-second trigger/60-second login policy; migrate original-only storage |
+| gui.py | Application builders, round/history/config methods, launch | Thai controls/history/details; readable Thai font; remove misleading legacy page-limit option; unrestricted login count; smoke policy evidence |
+| selfcheck.py | check_daily_queue, daily_fixture_html, check_daily_native_round, run_self_check | Sequential native browsers; both control types; old-limit reproduction; downloads before navigation; .97-only tracking and fresh .243-only download |
+| tools/promote_portable.py | main | Require hash-linked Thai GUI, 270 seconds, 30 rows, sequential/page-by-page policy and .97 tracker |
 
-Tests cover the new production entrypoint, date precedence, midnight during download, either-root skips in all save modes, exact extensions, two-worker deduplication, 70-second coalescing/restart, real monitor scheduling, one failed-source retry, queued arrivals, credential pause, corrupted-state preservation, no per-skip delay and explicit cached repair. Retained tests continue covering existing delivery, credentials, pagination and historical helper behavior.
-
-## Scope and limits
-
-Only this KDE project changes. No unrelated application, Windows/SMB permissions, credential format, business files or production mail is changed during verification. Business destinations receive only final files from real downloads/explicit repairs; diagnostics create no files there. Logs remain one shared state, one CSV per month and a lock; local cache/settings stay under the launching user's profile.
-
-The app polls local classic Outlook; it is not a server webhook. Live .97 Outlook/profile/share access and actual KDE selectors/login/download/logout require deployment validation. Portal page limits and unreadable dates fail or skip with visible reasons, rather than claiming the entire live server has been downloaded. Existing nonempty filenames are skipped regardless of their content; zero-byte/conflicting entries remain visible errors and are never overwritten.
+Only this KDE project changes. Other applications, credential encryption format, Windows/SMB permissions, mail flags and production business files are untouched by verification. Legacy helpers remain source-only references; the new runtime does not invoke keyword/OCR matching or account-wide sign-out.

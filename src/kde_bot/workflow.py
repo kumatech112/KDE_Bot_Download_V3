@@ -477,9 +477,11 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
     with WorkerLock(log_folder):
         history = History(log_folder)
         reporter = Reporter(history, callback)
+        reporter.language = "th"
         reporter.secrets = [account["password"] for account in settings["accounts"] if account["password"]]
         reporter.emit(1, "running", "Checking this Windows user's environment")
-        folders = list(dict.fromkeys((Path(settings["original_dir"]), Path(settings["new_dir"]))))
+        from .daily_download import daily_folders
+        folders = daily_folders(settings)
         if not scan_only:
             for folder in folders:
                 check_destination(folder)
@@ -517,7 +519,7 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
 
                 repair_delivery = DailyDelivery(history, reporter) if record.get("download_policy") == "daily_all" else delivery
                 repair_delivery.deliver(
-                    account["username"], record["filename"], selected_folders(settings, account),
+                    account["username"], record["filename"], daily_folders(settings) if record.get("download_policy") == "daily_all" else selected_folders(settings, account),
                     cannot_redownload,
                     [Path(settings["original_dir"]), Path(settings["new_dir"])],
                 )

@@ -33,7 +33,7 @@ def default_settings() -> dict[str, Any]:
         "max_pages": 50,
         "download_delay_seconds": 5,
         "mail_poll_seconds": 15,
-        "mail_delay_seconds": 70,
+        "mail_delay_seconds": 270,
         "login_retry_seconds": 60,
         "max_session_attempts": 2,
         "page_timeout_seconds": 60,
@@ -120,7 +120,9 @@ def normalize_settings(raw: dict[str, Any]) -> dict[str, Any]:
     result["mail_watch"]["include_subject"] = True
     # Mail is mandatory in this release; old timers never start portal sessions.
     result["mail_watch"]["enabled"] = True
-    result["mail_delay_seconds"] = 70
+    result["mail_delay_seconds"] = 270
+    if result["storage_mode"] == "original":
+        result["storage_mode"] = "both"
     result["login_retry_seconds"] = 60
     result["max_session_attempts"] = 2
     result["version"] = 3
@@ -205,8 +207,8 @@ def validate_settings(settings: dict[str, Any], require_credentials: bool = True
     mail = settings["mail_watch"]
     if not mail["enabled"]:
         raise ValueError("Email-triggered monitoring must remain enabled.")
-    if settings["mail_delay_seconds"] != 70 or settings["login_retry_seconds"] != 60 or settings["max_session_attempts"] != 2:
-        raise ValueError("Policy: a fixed 70-second arrival window and two attempts per account, with one 60-second retry.")
+    if settings["mail_delay_seconds"] != 270 or settings["login_retry_seconds"] != 60:
+        raise ValueError("Policy: wait 270 seconds after new mail; retry unavailable logins every 60 seconds.")
     if not isinstance(mail.get("folder_path", ""), str):
         raise ValueError("Outlook folder path must be text relative to the data mailbox.")
     if not mail["today_only"] or mail["unread_only"]:

@@ -362,7 +362,7 @@ def check_destination_preflight(root: Path) -> None:
     for folder in destinations:
         assert {path.name for path in folder.iterdir()} == {"business-file.gpg"}
         assert (folder / "business-file.gpg").read_bytes() == b"offline existing file"
-    assert any("save access is checked during real delivery" in event["reason"] for event in events)
+    assert any("ตรวจสิทธิ์บันทึกเมื่อดาวน์โหลดจริง" in event["reason"] for event in events)
 
 
 def check_flat_storage(root: Path) -> None:
@@ -524,30 +524,56 @@ def check_daily_queue(root: Path) -> None:
     mail = {"entry_id": "first", "store_id": "offline", "received": today() + "T08:00:00"}
     assert pending.ingest([mail], 100) == 1
     assert pending.ingest([{**mail, "entry_id": "second"}], 130) == 1
-    assert pending.state["pending_due"] == 170 and pending.claim(169) == []
+    assert pending.state["pending_due"] == 370 and pending.claim(369) == []
     restarted = DailyQueue(History(logs), settings)
     restarted.recover(150)
     assert restarted.ingest([mail], 160) == 0
-    jobs = restarted.claim(170)
-    assert len(jobs) == 2 and all(job["attempts"] == 1 for job in jobs)
-    restarted.ingest([{**mail, "entry_id": "during-download"}], 180)
-    restarted.ingest([{**mail, "entry_id": "later"}], 190)
-    assert restarted.state["pending_due"] == 250
-    restarted.finish("offline-daily-0", {"kind": "complete", "reason": "offline saved"}, 200)
-    restarted.finish("offline-daily-1", {"kind": "account_busy", "reason": "offline busy"}, 200)
-    assert restarted.claim(259) == []
-    retry = restarted.claim(260)
-    assert len(retry) == 1 and retry[0]["account"] == "offline-daily-1" and retry[0]["attempts"] == 2
-    restarted.finish("offline-daily-1", {"kind": "account_busy", "reason": "offline still busy"}, 261)
-    # The newer arrival's deadline elapsed while the bounded retry was active.
-    assert len(restarted.claim(261)) == 2
-    for account in settings["accounts"]:
-        restarted.finish(account["username"], {"kind": "empty", "reason": "offline missing"}, 262)
-    retry = restarted.claim(322)
-    assert len(retry) == 2
-    for account in settings["accounts"]:
-        restarted.finish(account["username"], {"kind": "empty", "reason": "offline missing"}, 323)
+    restarted.ingest([{**mail, "entry_id": "during-download"}], 380)
+    assert restarted.state["pending_due"] == 370  # Still the original unclaimed trigger window.
+    now = 370
+    for attempt in range(1, 5):
+        jobs = restarted.claim(now)
+        assert len(jobs) == 1 and jobs[0]["account"] == "offline-daily-0" and jobs[0]["attempts"] == attempt
+        restarted.finish("offline-daily-0", {"kind": "account_busy", "reason": "offline busy"}, now)
+        assert restarted.claim(now + 59) == []
+        now += 60
+    assert restarted.claim(now)[0]["attempts"] == 5
+    restarted.ingest([{**mail, "entry_id": "queued-after-login"}], now + 1)
+    restarted.finish("offline-daily-0", {"kind": "complete", "reason": "offline saved"}, now + 2)
+    second = restarted.claim(now + 2)
+    assert len(second) == 1 and second[0]["account"] == "offline-daily-1"
+    restarted.finish("offline-daily-1", {"kind": "complete", "reason": "offline saved"}, now + 3)
+    assert restarted.state["pending_due"] == now + 273
+    assert restarted.claim(now + 272) == []
+    assert len(restarted.claim(now + 273)) == 1
+    restarted.finish("offline-daily-0", {"kind": "download_failed", "reason": "offline failed file"}, now + 274)
+    assert restarted.claim(now + 274)[0]["account"] == "offline-daily-1"
+    restarted.finish("offline-daily-1", {"kind": "complete", "reason": "offline saved"}, now + 275)
     assert restarted.claim(10000) == []
+
+
+def daily_fixture_html(rows, custom_select=False, remove_rows=False):
+    """Local paginator fixture matching native and Material-style controls."""
+    control = ("<div role='combobox' tabindex='0' onclick=\"document.querySelector('[role=listbox]').hidden=false\">15</div>"
+               "<div role='listbox' hidden><div role='option' onclick='resize(30)'>30</div></div>" if custom_select else
+               "<select onchange='resize(Number(this.value))'><option>15</option><option>30</option></select>")
+    return ("<table><tbody></tbody></table><div data-kde-pagination>จำนวนแถวต่อ 1 หน้า " + control +
+            "<span id='range'></span><button id='first' aria-label='Go to first page' onclick='turn(0)'>First</button>"
+            "<button id='next' aria-label='Go to next page' onclick='turn(window.pageIndex+1)'>Next</button></div><script>"
+            "window.rows=" + json.dumps(rows) + ";window.removeRows=" + json.dumps(remove_rows) + ";" + """
+            window.pageIndex=0;window.pageSize=15;window.events=[];
+            function resize(size){window.pageSize=size;window.pageIndex=0;window.events.push('size:'+size);
+              const custom=document.querySelector('[role=combobox]');if(custom){custom.textContent=size;document.querySelector('[role=listbox]').hidden=true;}render();}
+            function turn(index){window.events.push('next:'+index);window.pageIndex=index;
+              document.querySelector('tbody').innerHTML='<tr><td>Loading</td></tr>';setTimeout(render,100);}
+            function render(){const start=window.pageIndex*window.pageSize;const visible=window.rows.slice(start,start+window.pageSize);
+              document.querySelector('tbody').innerHTML=visible.map((row,index)=>'<tr><td>'+(start+index+1)+'</td><td>'+row[0]+'</td><td>'+row[1]+'</td><td>1 KB</td><td><button>Download</button></td></tr>').join('');
+              document.querySelector('#range').textContent=(visible.length?start+1:0)+'-'+(start+visible.length)+' จาก '+window.rows.length;
+              document.querySelector('#first').disabled=window.pageIndex===0;document.querySelector('#next').disabled=start+visible.length>=window.rows.length;
+              document.querySelectorAll('tbody button').forEach((button,index)=>button.onclick=()=>{
+                const name=visible[index][0];window.events.push('download:'+name);
+                const link=document.createElement('a');link.href=URL.createObjectURL(new Blob(['payload '+name],{type:'application/octet-stream'}));link.download=name;link.click();
+                if(window.removeRows){window.rows.splice(start+index,1);render();}});}render();</script>""")
 
 
 def check_daily_native_round(root: Path) -> None:
@@ -557,13 +583,14 @@ def check_daily_native_round(root: Path) -> None:
     from .workflow import StructuredDownloader
     settings = default_settings()
     settings["download_delay_seconds"] = 0
+    settings["max_pages"] = 1  # The retained legacy guard must not block the next daily page.
     for index, account in enumerate(settings["accounts"]):
         account.update(username=f"offline-native-{index}", password="offline-only")
     for key in ("original_dir", "new_dir", "log_dir"):
         folder = root / ("native-" + key)
         folder.mkdir()
         settings[key] = str(folder)
-    (Path(settings["original_dir"]) / "already-original.zip").write_bytes(b"original existing")
+    (Path(settings["original_dir"]) / "already-original.zip").write_bytes(b"payload already-original.zip")
     (Path(settings["new_dir"]) / "already-new.zip").write_bytes(b"new existing")
     history = History(Path(settings["log_dir"]))
     reporter = Reporter(history, lambda _event: None)
@@ -577,6 +604,8 @@ def check_daily_native_round(root: Path) -> None:
                              ("shared.zip", date_text), ("already-original.zip", date_text), ("yesterday.zip", old_date)],
         "offline-native-1": [("post-only.bin", date_text), ("shared.zip", date_text), ("already-new.zip", date_text), ("unknown-date.zip", "Unknown")],
     }
+    catalogues["offline-native-0"].extend((f"daily-{index:02}.csv", date_text) for index in range(26))
+    page_evidence = []
     def local_login(engine, _page, account, _timeout):
         engine.session_attempted = True
         engine.session_owned = True
@@ -585,13 +614,9 @@ def check_daily_native_round(root: Path) -> None:
         engine.stage = 4
         username = next(account.username for account in engine.settings.accounts if account.label == engine.account)
         rows = catalogues[username]
-        page.set_content("""<table><tbody></tbody></table><script>const rows=""" + json.dumps(rows) + """;
-            document.querySelector('tbody').innerHTML=rows.map((row,index)=>
-            '<tr><td>'+(index+1)+'</td><td>'+row[0]+'</td><td>'+row[1]+'</td><td>1 KB</td><td><button>Download</button></td></tr>').join('');
-            document.querySelectorAll('button').forEach((button,index)=>button.onclick=()=>{
-                const link=document.createElement('a');link.href=URL.createObjectURL(new Blob(['payload '+rows[index][0]],{type:'application/octet-stream'}));
-                link.download=rows[index][0];link.click();});</script>""")
-    def local_logout(engine, _page, _account, _timeout):
+        page.set_content(daily_fixture_html(rows, custom_select=username.endswith("-0")))
+    def local_logout(engine, page, account, _timeout):
+        page_evidence.append((account.username, page.evaluate("({size:window.pageSize,events:window.events})")))
         engine.session_owned = False
     original_download = DailyDownloader.download_to_cache
     def native_download(engine, page, index, timeout):
@@ -605,27 +630,31 @@ def check_daily_native_round(root: Path) -> None:
             patch("kde_bot.workflow.MailEvidenceReader", side_effect=AssertionError("Content matching or OCR was used")):
         for sequence in (1, 2):
             jobs = [{"account": account["username"], "label": account["label"], "work_date": today(), "sequence": sequence} for account in settings["accounts"]]
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                outcomes = list(pool.map(lambda job: run_daily_account(settings, job, threading.Event(), reporter, history, root), jobs))
+            outcomes = [run_daily_account(settings, job, threading.Event(), reporter, history, root) for job in jobs]
             assert all(outcome["kind"] == "complete" for outcome in outcomes), outcomes
-            assert sorted(downloaded) == ["post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip"]
+            assert set(downloaded) == {"post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip", "already-original.zip"} | {f"daily-{index:02}.csv" for index in range(26)}
+            assert len(downloaded) == 32
     assert len(visited) == 4
-    expected = {"post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip"}
-    assert len(history.data["files"]) == 5
+    expected = {"post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip"} | {f"daily-{index:02}.csv" for index in range(26)}
+    assert len(history.data["files"]) == 32  # .243-only presence still requires a fresh KDE download.
     from .activity import read_activity
     activity, _latest = read_activity(Path(settings["log_dir"]), exact_names=True)
     completed = {event["filename"] for event in activity if event["status"] == "complete"}
-    assert completed == expected  # Same-stem extensions retain separate successful history events.
-    for key, existing in (("original_dir", "already-original.zip"), ("new_dir", "already-new.zip")):
+    assert completed == expected | {"already-original.zip"}
+    for key, existing in (("original_dir", {"already-original.zip"}), ("new_dir", {"already-original.zip", "already-new.zip"})):
         folder = Path(settings[key])
-        assert {path.name for path in folder.iterdir()} == expected | {existing}
+        assert {path.name for path in folder.iterdir()} == expected | existing
         for name in expected:
             assert (folder / name).read_text() == "payload " + name
+    assert all(evidence["size"] == 30 for _account, evidence in page_evidence)
+    events = page_evidence[0][1]["events"]
+    assert events.index(next(event for event in events if event.startswith("download:"))) < events.index("next:1")
 
 
 def run_self_check(output: Path) -> int:
     result = {"checks": [], "live_portal_access": False, "business_files_modified": False,
-              "download_policy": "daily_all", "ocr_enabled": False}
+              "download_policy": "daily_all", "ocr_enabled": False, "mail_delay_seconds": 270,
+              "tracker_source": "new_dir", "sequential_accounts": True, "page_by_page": True, "portal_rows_per_page": 30}
     try:
         with tempfile.TemporaryDirectory(prefix="kde-v3-exe-check-") as temporary:
             root = Path(temporary)
@@ -684,7 +713,6 @@ def run_self_check(output: Path) -> int:
                 reporter, delivery, settings, threading.Event(),
             )
             from .legacy_core import sync_playwright_without_console
-            barrier = threading.Barrier(2)
             original_subprocess_factory = asyncio.create_subprocess_exec
 
             def browser_worker(index):
@@ -696,7 +724,6 @@ def run_self_check(output: Path) -> int:
                                              "domain": "example.test", "path": "/"}])
                         page = context.new_page()
                         page.set_content("<html><body><h1>KDE offline browser check</h1></body></html>")
-                        barrier.wait(timeout=30)
                         assert page.locator("h1").inner_text() == "KDE offline browser check"
                         assert context.cookies()[0]["value"] == str(index)
                         context.close()
@@ -704,14 +731,13 @@ def run_self_check(output: Path) -> int:
                     finally:
                         browser.close()
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                assert list(pool.map(browser_worker, range(2))) == [0, 1]
+            assert [browser_worker(index) for index in range(2)] == [0, 1]
             assert asyncio.create_subprocess_exec is original_subprocess_factory
-            result["checks"].append("Two concurrent packaged browser processes with isolated account cookies; offline")
+            result["checks"].append("Sequential packaged browser processes with isolated account cookies; offline")
             check_arrival_metadata(root)
             result["checks"].append("Incoming data mailbox IDs only; read mail included; no subject/body/images read; optional folder and outgoing/Notes exclusions; fake COM only")
             check_daily_queue(root)
-            result["checks"].append("70-second fixed arrival window, seen-ID restart persistence, queued arrivals during active work, one bounded busy retry and no idle portal loop")
+            result["checks"].append("270-second arrival window, persisted mail IDs, sequential accounts, busy retry beyond two attempts at 60 seconds, restored 270-second cooldown after success, no idle portal loop")
             check_flat_storage(root)
             result["checks"].append("Two concurrent accounts store verified files directly in shared destination roots; legacy account subfolders ignored in all three modes")
             check_destination_preflight(root)
@@ -719,7 +745,7 @@ def run_self_check(output: Path) -> int:
             check_portal_paging(root)
             result["checks"].append("Actual offline browser: delayed tables with background polling, shorter reverse delivery, fresh row indexes, stalled navigation refusal and Stop cancellation")
             check_daily_native_round(root)
-            result["checks"].append("Real two-browser daily sweep: arbitrary names, today-only date guard, one download per shared filename, either-root skips without copying, both final roots, no OCR/content matching or account-wide reset; second sweep makes no downloads")
+            result["checks"].append("Real sequential daily sweep: native and Material-style 30-row selectors, downloads before next-page navigation despite old max_pages=1, today's portal dates, .97 duplicate tracking, exact extensions/history, no OCR/reset; second sweep makes no downloads")
         result["status"] = "passed"
         exit_code = 0
     except Exception as error:

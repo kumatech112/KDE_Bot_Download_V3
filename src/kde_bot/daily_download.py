@@ -17,7 +17,7 @@ from . import legacy_core as core
 from .evidence import BANGKOK, today
 from .search_round import AccountBusyError, CredentialsError
 from .storage import Delivery, check_destination, exact_record_key
-from .workflow import StructuredDownloader, make_engine_settings, selected_folders
+from .workflow import StructuredDownloader, make_engine_settings
 
 
 def portal_day(row: dict) -> str | None:
@@ -36,8 +36,15 @@ def portal_day(row: dict) -> str | None:
             return None
     if text:
         return None  # Never bypass an unreadable portal date with a filename guess.
-    days, _months = core.normalized_business_dates(row.get("filename", ""))
-    return next(iter(days)) if len(days) == 1 else None
+    return None
+
+
+def daily_folders(settings):
+    """.97 is the required downloaded-file tracker; .243 is an optional copy."""
+    folders = [Path(settings["new_dir"])]
+    if settings["storage_mode"] != "new":
+        folders.append(Path(settings["original_dir"]))
+    return list(dict.fromkeys(folders))
 
 
 def scan_arrivals(settings: dict, stop_event: threading.Event) -> list[dict]:
@@ -131,12 +138,17 @@ def scan_arrivals(settings: dict, stop_event: threading.Event) -> list[dict]:
 
 class DailyDelivery(Delivery):
     """Exact Windows filename identity; extensions and business numbers stay distinct."""
-    def __init__(self, history, reporter):
+    def __init__(self, history, reporter, download_missing_tracker=False):
         super().__init__(history, reporter)
+        self.download_missing_tracker = download_missing_tracker
         reporter.file_key = exact_record_key
 
     def record_identifier(self, account, filename):
         return exact_record_key(account, filename)
+
+    def existing_source(self, available):
+        # .243 presence does not establish that today's file was downloaded.
+        return None if self.download_missing_tracker else super().existing_source(available)
 
     def existing(self, folder, filename):
         target = folder / filename
@@ -168,7 +180,8 @@ class DailyDelivery(Delivery):
 
 class DailyDownloader(StructuredDownloader):
     def __init__(self, settings, reporter, delivery, configuration, stop_event, work_day=None):
-        exact_delivery = DailyDelivery(delivery.history, reporter)
+        reporter.language = "th"
+        exact_delivery = DailyDelivery(delivery.history, reporter, download_missing_tracker=True)
         super().__init__(settings, reporter, exact_delivery, configuration, stop_event, read_evidence=False)
         self.work_day = work_day or today()
         self.jobs = [{"id": "daily-sweep", "lookup": {}}]  # Use the verified complete-catalogue traversal.
@@ -176,6 +189,10 @@ class DailyDownloader(StructuredDownloader):
         self.delay_on_skipped = False
         self.eligible = 0
         self.rejected_dates = 0
+
+    def _download_visible_pages(self, page, account, timeout_ms, allowed_filenames=None):
+        from .portal_pages import download_pages
+        return download_pages(self, page, account, timeout_ms)
 
     def _select_page_mail_matches(self, rows, allowed_filenames):
         selected = {}
@@ -201,25 +218,27 @@ class DailyDownloader(StructuredDownloader):
             return "error"
         with self.delivery.history.file_lock(filename):
             try:
-                # Windows/SMB lookup is case-insensitive. Fresh stat calls observe other users'
-                # publications without repeatedly listing every file in both shared roots.
-                existing = []
-                for folder in dict.fromkeys((Path(self.configuration["original_dir"]), Path(self.configuration["new_dir"]))):
-                    target = self.delivery.existing(folder, filename)
-                    if target is not None:
-                        existing.append(target)
-                if existing:
-                    self.reporter.emit(5, "skipped", "Filename already exists in either destination; no download or extra copy",
-                                       account.label, filename, str(existing[0]), persist=True, count=True)
+                existing = self.delivery.existing(Path(self.configuration["new_dir"]), filename)
+                if existing is not None:
+                    self.reporter.emit(5, "skipped", "พบไฟล์ในโฟลเดอร์ .97 แล้ว จึงไม่ดาวน์โหลดซ้ำ",
+                                       account.label, filename, str(existing), persist=True, count=True)
                     return "skipped"
-                configuration = next(item for item in self.configuration["accounts"] if item["username"] == account.username)
                 def download_today(_target):
-                    source = self.download_to_cache(page, row_index, timeout_ms)
+                    current_index = row_index
+                    if page is not None:
+                        matches = [(index, current) for index, current in self._table_rows(page)
+                                   if current.get("filename") == filename
+                                   and current.get("file_time", "") == row.get("file_time", "")
+                                   and current.get("size_text", "") == row.get("size_text", "")]
+                        if len(matches) != 1 or portal_day(matches[0][1]) != today():
+                            raise RuntimeError("รายการไฟล์เปลี่ยนก่อนกดดาวน์โหลด จึงไม่กดไฟล์ที่ชื่อหรือวันที่ไม่ตรง")
+                        current_index = matches[0][0]
+                    source = self.download_to_cache(page, current_index, timeout_ms)
                     if today() != self.work_day:
                         source.unlink(missing_ok=True)
                         raise RuntimeError("Bangkok date changed during download; previous-day cache discarded before publication.")
                     return source
-                return self.delivery.deliver(account.username, filename, selected_folders(self.configuration, configuration), download_today)
+                return self.delivery.deliver(account.username, filename, daily_folders(self.configuration), download_today)
             except Exception as error:
                 self.reporter.emit(5, "error", f"Cannot check or save this file: {type(error).__name__}: {error}",
                                    account.label, filename, persist=True, count=True)
@@ -231,7 +250,7 @@ class DailyQueue:
         self.history = history
         self.settings = settings
         self.blocked = set()
-        self.state = history.data.setdefault("daily_watch", {"day": today(), "seen": [], "pending_due": None, "sequence": 0, "jobs": {}})
+        self.state = history.data.setdefault("daily_watch", {"day": today(), "seen": [], "pending_due": None, "sequence": 0, "jobs": {}, "flow_version": 5})
         self.roll_day()
 
     def roll_day(self):
@@ -251,8 +270,17 @@ class DailyQueue:
                     job.update(status="expired", last_reason="Account removed or disabled in Settings.")
                     continue
                 if job["status"] == "running":
-                    job.update(status="waiting" if job["attempts"] < 2 else "deferred",
-                               due=max(now, min(job["due"], now + 60)), last_reason="Interrupted sweep; attempts and deadline retained.")
+                    job.update(status="waiting", due=max(now, min(job["due"], now + 60)),
+                               last_reason="งานถูกขัดจังหวะ เก็บจำนวนครั้งและเวลารอเดิมไว้")
+                if job.get("flow_version") != 5 and job["status"] == "waiting":
+                    # Upgrade may lengthen a pending old 70-second trigger once, never on each restart.
+                    if not job.get("busy_sources"):
+                        job["due"] = max(job["due"], now + 270)
+                    job["flow_version"] = 5
+            if self.state.get("flow_version") != 5:
+                if self.state["pending_due"] is not None:
+                    self.state["pending_due"] = max(self.state["pending_due"], now + 270)
+                self.state["flow_version"] = 5
             self.history.save()
 
     def ingest(self, arrivals, now):
@@ -269,7 +297,7 @@ class DailyQueue:
                     added += 1
             if added:
                 self.state["seen"] = sorted(seen)
-                deadline = now + 70
+                deadline = now + 270
                 self.state["pending_due"] = min(self.state["pending_due"], deadline) if self.state["pending_due"] is not None else deadline
                 self.history.save()
             return added
@@ -277,7 +305,7 @@ class DailyQueue:
     def request_round(self, now):
         self.roll_day()
         with self.history.lock:
-            self.state["pending_due"] = min(self.state["pending_due"], now + 70) if self.state["pending_due"] is not None else now + 70
+            self.state["pending_due"] = min(self.state["pending_due"], now + 270) if self.state["pending_due"] is not None else now + 270
             self.history.save()
 
     def claim(self, now):
@@ -296,13 +324,16 @@ class DailyQueue:
                         username = account["username"]
                         jobs[username] = {"id": username, "account": username, "label": account["label"], "status": "waiting", "attempts": 0,
                                           "due": self.state["pending_due"], "work_date": self.state["day"], "sequence": self.state["sequence"],
-                                          "subject": "Download all today's KDE files", "lookup": {}, "last_reason": "Mail arrival triggered a daily sweep."}
+                                          "flow_version": 5, "subject": "ดาวน์โหลดไฟล์ของวันนี้", "lookup": {}, "last_reason": "มีเมลใหม่ เริ่มรอบดาวน์โหลดตามลำดับบัญชี"}
                 self.state["pending_due"] = None
             ready = []
             for job in jobs.values():
                 if job["status"] == "waiting" and job["due"] <= now:
                     job.update(status="running", attempts=job["attempts"] + 1, due=now + 60)
                     ready.append(copy.deepcopy(job))
+                    break  # Exactly one account may acquire a browser session.
+                if job["status"] == "waiting":
+                    break  # Keep the original account order while its login is cooling down.
             if ready:
                 self.history.save()
             return ready
@@ -316,16 +347,18 @@ class DailyQueue:
                 job["status"] = "expired"
             elif outcome["kind"] == "complete":
                 job["status"] = "complete"
+                if self.state["pending_due"] is not None:
+                    self.state["pending_due"] = max(self.state["pending_due"], now + 270)
             elif outcome["kind"] == "credentials":
                 job["status"] = "review"
                 self.blocked.add(username)
-            elif job["attempts"] >= 2:
-                job["status"] = "deferred"
-                job["last_reason"] += " Two attempts used; wait for new mail or Request download round."
-            else:
+            elif outcome["kind"] in {"account_busy", "login_failed"} or stopped:
                 job.update(status="waiting", due=now + 60)
                 if outcome["kind"] == "account_busy":
                     job["busy_sources"] = [username]
+            else:
+                job["status"] = "deferred"
+                job["last_reason"] += " เก็บผลไว้และรอเมลใหม่ก่อนเริ่มรอบถัดไป"
             self.history.save()
 
     def snapshot(self):
@@ -334,7 +367,7 @@ class DailyQueue:
             if self.state["pending_due"] is not None:
                 rows.append({"id": "pending-daily-round", "account": "", "label": "Pre + Post", "status": "waiting", "attempts": 0,
                              "due": self.state["pending_due"], "sequence": self.state["sequence"] + 1,
-                             "subject": "Next daily download round", "lookup": {}, "last_reason": "70-second mail window; countdown is not restarted."})
+                             "subject": "รอบถัดไปจากเมลใหม่", "lookup": {}, "last_reason": "รอ 4 นาที 30 วินาที เปิดใช้งานบัญชีทีละบัญชี"})
             return rows
 
 
@@ -342,11 +375,12 @@ def run_daily_account(settings, job, stop_event, reporter, history, temporary):
     engine = None
     try:
         index = next(index for index, account in enumerate(settings["accounts"]) if account["username"] == job["account"])
-        for folder in dict.fromkeys((Path(settings["original_dir"]), Path(settings["new_dir"]))):
-            check_destination(folder)
         state_path = temporary / f"daily-{job['sequence']}-{index}.json"
         engine = DailyDownloader(make_engine_settings(settings, state_path),
                                  reporter, Delivery(history, reporter), settings, stop_event, job["work_date"])
+        engine.stage = 5
+        for folder in daily_folders(settings):
+            check_destination(folder)
         account = next(item for item in engine.settings.accounts if item.username == job["account"])
         result = engine.process_account(account)
         if engine.logout_failures:
@@ -356,10 +390,11 @@ def run_daily_account(settings, job, stop_event, reporter, history, temporary):
         if result.get("errors"):
             return {"kind": "download_failed", "reason": f"{result['errors']} files could not be saved; see History for filenames and reasons."}
         if not engine.eligible:
-            return {"kind": "empty", "reason": "No dated-today files were visible in this KDE account."}
+            return {"kind": "complete", "reason": "ตรวจสอบครบแล้ว ยังไม่มีไฟล์ของวันนี้ในบัญชีนี้ รอเมลใหม่"}
         return {"kind": "complete", "reason": f"Today's files checked: {engine.eligible}; saved {result.get('downloaded', 0)}, already present {result.get('skipped', 0)}."}
     except Exception as error:
-        kind = "account_busy" if isinstance(error, AccountBusyError) else "credentials" if isinstance(error, CredentialsError) else "download_failed"
+        kind = ("account_busy" if isinstance(error, AccountBusyError) else "credentials" if isinstance(error, CredentialsError)
+                else "login_failed" if engine is not None and engine.stage == 3 else "download_failed")
         reason = f"{type(error).__name__}: {error}"
         for account in settings["accounts"]:
             if account["password"]:
@@ -379,7 +414,7 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
     next_scan = 0
     last_snapshot = None
     last_summary = None
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="KDE-daily") as pool:
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="KDE-daily") as pool:
         while not stop_event.is_set():
             now = time.time()
             pending.roll_day()
@@ -401,7 +436,7 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
                 try:
                     added = pending.ingest(scan_arrivals(settings, stop_event), time.time())
                     if added:
-                        reporter.emit(2, "waiting", f"{added} new mail arrivals; download all today's KDE files after the fixed 70-second window.", persist=True)
+                        reporter.emit(2, "waiting", f"พบเมลใหม่ {added} ฉบับ รอ 4 นาที 30 วินาทีก่อนดาวน์โหลดไฟล์ของวันนี้", persist=True)
                 except Exception as error:
                     reporter.emit(2, "error", str(error), persist=True, count=True)
                     if not watch:
@@ -415,7 +450,7 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
             if requests is not None and signature != last_snapshot:
                 reporter.callback({"kind": "queue", "jobs": rows})
                 last_snapshot = signature
-            summary = f"Watching data mail arrivals · Today's files only · Active accounts {len(active)}/2"
+            summary = f"ติดตามเมล data · ไฟล์วันที่ปัจจุบัน · กำลังใช้งาน {len(active)} บัญชีจาก 2 บัญชี"
             if summary != last_summary:
                 reporter.emit(2, "summary", summary)
                 last_summary = summary
