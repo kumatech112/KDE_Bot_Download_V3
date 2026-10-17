@@ -37,6 +37,10 @@ def default_settings() -> dict[str, Any]:
         "login_retry_seconds": 60,
         "daily_cleanup_enabled": True,
         "start_with_windows": True,
+        "auto_start_tracking": True,
+        "night_pause_enabled": True,
+        "cleanup_time": "22:00",
+        "resume_time": "05:00",
         "max_session_attempts": 2,
         "page_timeout_seconds": 60,
         "accounts": [
@@ -109,6 +113,7 @@ def encrypt_credentials(value: Any, key: str = "") -> Any:
 
 
 def normalize_settings(raw: dict[str, Any]) -> dict[str, Any]:
+    from .schedule import clock_parts
     result = default_settings()
     for key in result:
         if key in raw and key not in {"accounts", "mail_watch"}:
@@ -122,12 +127,14 @@ def normalize_settings(raw: dict[str, Any]) -> dict[str, Any]:
     result["mail_watch"]["include_subject"] = True
     # Mail is mandatory in this release; old timers never start portal sessions.
     result["mail_watch"]["enabled"] = True
-    result["mail_delay_seconds"] = 270
     if result["storage_mode"] == "original":
         result["storage_mode"] = "both"
-    result["login_retry_seconds"] = 60
     result["max_session_attempts"] = 2
     result["version"] = 3
+    clock_parts(result['cleanup_time'])
+    clock_parts(result['resume_time'])
+    if result['cleanup_time'] == result['resume_time']:
+        raise ValueError('เวลาพักและเวลาเริ่มติดตามต้องไม่ตรงกัน')
     if "accounts" in raw:
         if not isinstance(raw["accounts"], list) or len(raw["accounts"]) > 2:
             raise ValueError("Configure at most two KDE accounts: Pre and Post.")
@@ -178,18 +185,21 @@ def import_settings(path: Path) -> tuple[dict[str, Any], list[str]]:
 
 
 def validate_settings(settings: dict[str, Any], require_credentials: bool = True) -> None:
-    if not isinstance(settings.get('start_with_windows', True), bool):
-        raise ValueError('Windows startup must be enabled or disabled.')
+    from .schedule import clock_parts
+    for key in ('start_with_windows', 'auto_start_tracking', 'night_pause_enabled', 'headless'):
+        if not isinstance(settings.get(key, True), bool):
+            raise ValueError('ตัวเลือกเปิด/ปิดไม่ถูกต้อง: ' + key)
+    for key in ('cleanup_time', 'resume_time'):
+        clock_parts(settings.get(key, '22:00' if key == 'cleanup_time' else '05:00'))
+    if settings.get('cleanup_time', '22:00') == settings.get('resume_time', '05:00'):
+        raise ValueError('เวลาพักและเวลาเริ่มติดตามต้องไม่ตรงกัน')
     if not isinstance(settings.get('daily_cleanup_enabled', True), bool):
         raise ValueError('การลบไฟล์อัตโนมัติต้องเป็นค่าเปิดหรือปิด')
     if settings["storage_mode"] not in {"both", "original", "new"}:
         raise ValueError("Choose a storage mode.")
-    for key in ("page_timeout_seconds", "max_pages", "search_days"):
+    for key in ("max_pages", "search_days"):
         if not isinstance(settings[key], int) or settings[key] < 1:
             raise ValueError(f"{key}: enter a positive whole number.")
-    for key in ("download_delay_seconds",):
-        if not isinstance(settings[key], int) or settings[key] < 0:
-            raise ValueError(f"{key}: enter a whole number of zero or greater.")
     for key in ("log_dir", "original_dir", "new_dir"):
         if not str(settings[key]).strip() or not Path(settings[key]).is_absolute():
             raise ValueError(f"{key}: enter an absolute folder path.")
@@ -213,14 +223,15 @@ def validate_settings(settings: dict[str, Any], require_credentials: bool = True
     mail = settings["mail_watch"]
     if not mail["enabled"]:
         raise ValueError("Email-triggered monitoring must remain enabled.")
-    if settings["mail_delay_seconds"] != 270 or settings["login_retry_seconds"] != 60:
-        raise ValueError("Policy: wait 270 seconds after new mail; retry unavailable logins every 60 seconds.")
+    for key, minimum, maximum in (('mail_delay_seconds', 0, 86400), ('login_retry_seconds', 5, 3600),
+                                  ('mail_poll_seconds', 5, 3600), ('download_delay_seconds', 0, 3600),
+                                  ('page_timeout_seconds', 5, 600)):
+        if type(settings[key]) is not int or not minimum <= settings[key] <= maximum:
+            raise ValueError(f'{key}: กรุณากรอกจำนวนเต็ม {minimum}–{maximum}')
     if not isinstance(mail.get("folder_path", ""), str):
         raise ValueError("Outlook folder path must be text relative to the data mailbox.")
     if not mail["today_only"] or mail["unread_only"]:
         raise ValueError("Monitor today's mail, including read messages; processed message IDs prevent duplicates.")
-    if not isinstance(settings["mail_poll_seconds"], int) or settings["mail_poll_seconds"] < 5:
-        raise ValueError("Outlook polling must be at least five seconds.")
     for key in ("max_messages_per_folder", "max_body_chars"):
         if not isinstance(mail[key], int) or mail[key] < 1:
             raise ValueError(f"{key}: enter a positive whole number.")

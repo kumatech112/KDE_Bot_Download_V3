@@ -1,4 +1,27 @@
-# KDE 3.7.0 data flow and changed functions
+# KDE 3.8.0 data flow and changed functions
+
+## 3.8.0 grouped preferences
+
+Thai settings section → typed collect/validate → encrypted per-user settings → Save only or explicit start. Settings → DailyQueue determines new mail/retry/recovery/cooldown deadlines; Settings → TrackingHours and BackgroundClock determine minute-accurate Bangkok pause/resume; Settings → DailyCleanup and background maintenance share the selected cleanup cutoff. Existing pending deadlines remain intact. The same exact roots, folder protection, day-scoped deletion journal and worker lock still constrain cleanup.
+
+| File | Functions | Change |
+|---|---|---|
+| settings.py | default_settings, normalize_settings, validate_settings | Add cleanup/resume times, pause/auto-start switches; preserve selected delays; validate HH:MM, distinct boundaries, bounded integers and booleans; encrypted persistence unchanged |
+| schedule.py | clock_parts, scheduled_time, overnight_key | Parse minute-accurate times and determine wrapped or same-day pause windows |
+| schedule.py | TrackingHours.__init__, key, resume_manually, allowed | Use selected window; manual override remains locked/persisted and is invalidated when the window changes |
+| schedule.py | BackgroundClock.__init__, next_time, tick | Selected cleanup/resume deadlines; independent pause switch; retain missed-date deletion protection |
+| cleanup.py | cleanup_root, DailyCleanup.__init__/tick/run, run_scheduled_cleanup | Use configured cutoff throughout in-app and background paths; concise results; immutable roots and nonrecursive deletion unchanged |
+| daily_download.py | DailyQueue.recover/ingest/request_round/claim/finish/snapshot, run_daily_monitor | Selected mail/login delays in all queue paths; preserve existing deadlines; selected tracking hours and concise status |
+| daily_download.py | DailyDownloader.handle_file | Time-neutral deletion-journal message |
+| gui.py | Application.__init__, build_monitor, add_field, build_settings | Four settings sections; remove general banners/Advanced dialog; file picker, typed numeric controls, Save and Save & Start |
+| gui.py | collect_settings, browse, save_configuration, update_schedule, start | Validate typed edits, commit only valid candidates, reconfigure timers only when schedule changes, save without starting |
+| gui.py | auto_start, show_window, configure_background_startup, start_maintenance, render_jobs | Respect automatic-tracking choice, concise status/errors, selected resume time |
+| gui.py | launch/capture | Exercise actual custom-value save/reload, save-only behavior and all four settings screenshots |
+| workflow.py | StructuredDownloader._browser_launch_kwargs | Honor explicit Chrome/Edge even in headless mode; clear missing-browser errors |
+| selfcheck.py | check_custom_preferences, run_self_check | Actual packaged custom persistence, queue timing and clock boundary regression using isolated data |
+| tools/promote_portable.py | main | Versioned background evidence; require grouped-settings/editable-timing/save-only GUI checks |
+
+Default values remain 270/60 seconds and 22:00/05:00; fixed today-only, sequential accounts, 30 portal rows, no overwrite, folder protection and .97 tracking are intentionally retained. Historical version notes below describe earlier defaults and UI layouts.
 
 ## 3.7.0 background workflow (supersedes scheduled-task flows below)
 

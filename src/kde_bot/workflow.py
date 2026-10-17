@@ -384,7 +384,14 @@ class StructuredDownloader(core.KdeDownloader):
 
     def _browser_launch_kwargs(self) -> dict[str, Any]:
         result = super()._browser_launch_kwargs()
+        configured = self.configuration.get('chrome_path', '').strip()
+        if configured:
+            if not Path(configured).is_file():
+                raise FileNotFoundError('ไม่พบ Chrome / Edge ที่ตั้งค่าไว้: ' + configured)
+            result['executable_path'] = configured
         if not self.settings.headless:
+            if not result.get('executable_path'):
+                raise FileNotFoundError('กรุณาเลือก Chrome / Edge เพื่อแสดงหน้าต่างเบราว์เซอร์')
             result["args"] = [
                 argument for argument in result["args"]
                 if not argument.startswith(("--window-position", "--window-size"))

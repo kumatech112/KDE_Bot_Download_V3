@@ -25,7 +25,7 @@ from .storage import History, WorkerLock, timestamp
 from .workflow import run_cycle
 from .schedule import BackgroundClock
 
-STEPS = {1: "เริ่มต้น", 2: "ตรวจเมล", 3: "เข้าสู่ระบบ", 4: "ตรวจรายการ", 5: "ตรวจไฟล์", 6: "ดาวน์โหลด", 7: "บันทึกไฟล์", 8: "ออกจากระบบ", 9: "ลบไฟล์ 22:00"}
+STEPS = {1: "เริ่มต้น", 2: "ตรวจเมล", 3: "เข้าสู่ระบบ", 4: "ตรวจรายการ", 5: "ตรวจไฟล์", 6: "ดาวน์โหลด", 7: "บันทึกไฟล์", 8: "ออกจากระบบ", 9: "ลบไฟล์ตามเวลา"}
 
 
 STATUS_LABELS = {"running": 'กำลังทำงาน', "stage_complete": 'สำเร็จ', "complete": 'เสร็จแล้ว',
@@ -61,13 +61,13 @@ class Application(ttk.Frame):
         self.instance = instance
         self.tray = None
         self.closing = False
-        self.background_clock = BackgroundClock(time.time())
         self.maintenance_stop = threading.Event()
         self.maintenance_worker = None
         self.resume_pending = False
         self.resume_manual = not background
         self.schedule_paused = False
         self.settings, self.notices = load_settings()
+        self.background_clock = BackgroundClock(time.time(), self.settings)
         self.events: queue.Queue = queue.Queue()
         self.requests: queue.Queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -76,6 +76,7 @@ class Application(ttk.Frame):
         self.jobs: dict[str, dict[str, Any]] = {}
         self.activity = ActivityHistory()
         self.variables: dict[str, tk.Variable] = {}
+        self.field_labels = {}
         self.password_controls: dict[str, tuple[Any, tk.BooleanVar, Any]] = {}
         self.inputs: list[Any] = []
         self.busy_buttons: list[Any] = []
@@ -83,8 +84,8 @@ class Application(ttk.Frame):
         self.summary = tk.StringVar(value='ยังไม่มีรอบดาวน์โหลด')
         self.mail_health = {}
         self.mail_status = tk.StringVar(value='การตรวจเมล: ยังไม่ได้เริ่มทำงาน')
-        self.cleanup_status = tk.StringVar(value='ปิดหน้าต่าง = ทำงานเบื้องหลัง · ลบ 22:00 (เก็บทุกโฟลเดอร์) · ติดตามต่อ 05:00 หรือเมื่อเปิด KDE')
-        self.current_step = tk.StringVar(value="เมลใหม่ → รอ 4 นาที 30 วินาที → ทำทีละบัญชี หน้าละ 30 รายการ → ตรวจไฟล์ซ้ำจาก .97")
+        self.cleanup_status = tk.StringVar(value='')
+        self.current_step = tk.StringVar(value='พร้อมใช้งาน')
         self.filter = tk.StringVar()
         self.follow_history = tk.BooleanVar(value=True)
         self.history_count = tk.StringVar(value='0 รายการ')
@@ -99,7 +100,6 @@ class Application(ttk.Frame):
         self.settings_page = ttk.Frame(self.tabs, padding=14)
         self.tabs.add(self.settings_page, text='ตั้งค่า')
         self.build_settings()
-        ttk.Label(self, textvariable=self.current_step, wraplength=1100).grid(row=4, column=0, sticky="w")
         ttk.Label(self, text=f"{socket.gethostname()} / {os.environ.get('USERNAME', '')}").grid(row=5, column=0, sticky="w", pady=(6, 0))
         self.fill_settings()
         self.filter.trace_add("write", lambda *_: self.render_activity())
@@ -182,7 +182,6 @@ class Application(ttk.Frame):
                                          ("#", 'บัญชี', 'รอบดาวน์โหลด', 'สถานะ', 'เวลารอ', 'เข้าสู่ระบบ', 'ผลการทำงาน'),
                                          (45, 85, 260, 160, 70, 70, 255))
         self.job_table.bind("<Double-1>", lambda _event: self.review_request())
-        ttk.Label(page, text="ทำงานเมื่อมีเมลใหม่เท่านั้น หากเข้าสู่ระบบไม่ได้หรือมีผู้ใช้อยู่ รอ 1 นาทีแล้วลองใหม่ กดหยุดได้ทุกเมื่อ", wraplength=1050).grid(row=2, column=0, sticky="w", pady=(8, 0))
 
     def build_activity(self) -> None:
         page = ttk.Frame(self.tabs, padding=10)
@@ -200,9 +199,10 @@ class Application(ttk.Frame):
                                              (140, 80, 95, 100, 270, 340), row=1)
         self.activity_table.bind("<Double-1>", lambda _event: self.show_selected())
 
-    def add_field(self, parent, row, label, path, password=False, choices=None, boolean=False, browse=False):
+    def add_field(self, parent, row, label, path, password=False, choices=None, boolean=False, browse=False, file=False):
         variable = tk.BooleanVar() if boolean else tk.StringVar()
         self.variables[path] = variable
+        self.field_labels[path] = label
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 16), pady=5)
         if boolean:
             widget = ttk.Checkbutton(parent, variable=variable)
@@ -220,7 +220,7 @@ class Application(ttk.Frame):
             self.password_controls[path] = (widget, visible, toggle)
             self.inputs.append(toggle)
         if browse:
-            button = ttk.Button(parent, text='เลือกโฟลเดอร์', command=lambda: self.browse(variable))
+            button = ttk.Button(parent, text='เลือกไฟล์' if file else 'เลือกโฟลเดอร์', command=lambda: self.browse(variable, file))
             button.grid(row=row, column=2, padx=(8, 0))
             self.busy_buttons.append(button)
 
@@ -235,16 +235,20 @@ class Application(ttk.Frame):
 
     def build_settings(self) -> None:
         page = self.settings_page
-        page.columnconfigure(1, weight=1)
-        self.notice_label = ttk.Label(page, text='รหัสผ่านถูกเข้ารหัสสำหรับผู้ใช้ Windows นี้ เมื่อตั้งค่าครบ โปรแกรมจะเริ่มทำงานอัตโนมัติ', wraplength=1050)
-        self.notice_label.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
-        self.add_field(page, 1, 'กล่องเมล Outlook', "mail_watch.mailbox_filter")
-        self.add_field(page, 2, 'การจัดเก็บ', "storage_mode", choices=list(MODES))
-        self.add_field(page, 3, 'โฟลเดอร์คัดลอก .243', "original_dir", browse=True)
-        self.add_field(page, 4, 'โฟลเดอร์ดาวน์โหลด .97', "new_dir", browse=True)
-        self.add_field(page, 5, 'โฟลเดอร์ประวัติ', "log_dir", browse=True)
-        accounts = ttk.Frame(page)
-        accounts.grid(row=6, column=0, columnspan=3, sticky="ew", pady=14)
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(0, weight=1)
+        self.settings_tabs = ttk.Notebook(page)
+        self.settings_tabs.grid(row=0, column=0, sticky='nsew')
+        self.settings_sections = {}
+        for key, title in (('accounts', 'บัญชี'), ('storage', 'จัดเก็บ'), ('timing', 'เวลา'), ('application', 'โปรแกรม')):
+            section = ttk.Frame(self.settings_tabs, padding=16)
+            section.columnconfigure(1, weight=1)
+            self.settings_tabs.add(section, text=title)
+            self.settings_sections[key] = section
+        account_page = self.settings_sections['accounts']
+        self.add_field(account_page, 0, 'กล่องเมล Outlook', 'mail_watch.mailbox_filter')
+        accounts = ttk.Frame(account_page)
+        accounts.grid(row=1, column=0, columnspan=3, sticky='ew', pady=14)
         for index, title in enumerate(("Pre", "Post")):
             accounts.columnconfigure(index, weight=1)
             frame = ttk.LabelFrame(accounts, text=title, padding=12)
@@ -254,46 +258,41 @@ class Application(ttk.Frame):
             self.add_field(frame, 0, 'เปิดใช้งาน', prefix + "enabled", boolean=True)
             self.add_field(frame, 1, 'ชื่อผู้ใช้', prefix + "username")
             self.add_field(frame, 2, 'รหัสผ่าน', prefix + "password", password=True)
-        self.add_field(page, 7, 'ลบไฟล์ทุกวัน 22:00 (เก็บ Check ไว้)', 'daily_cleanup_enabled', boolean=True)
+        storage = self.settings_sections['storage']
+        self.add_field(storage, 0, 'การจัดเก็บ', 'storage_mode', choices=list(MODES))
+        self.add_field(storage, 1, 'ดาวน์โหลด .97', 'new_dir', browse=True)
+        self.add_field(storage, 2, 'คัดลอก .243', 'original_dir', browse=True)
+        self.add_field(storage, 3, 'ประวัติ', 'log_dir', browse=True)
+        ttk.Label(storage, text='การลบอัตโนมัติเก็บทุกโฟลเดอร์ รวม Check ไว้').grid(row=4, column=0, columnspan=3, sticky='w', pady=12)
+        timing = self.settings_sections['timing']
+        for row, label, key in ((0, 'รอหลังพบเมล (วินาที)', 'mail_delay_seconds'),
+                                 (1, 'ลองเข้าสู่ระบบใหม่ทุก (วินาที)', 'login_retry_seconds'),
+                                 (2, 'ตรวจเมลทุก (วินาที)', 'mail_poll_seconds'),
+                                 (3, 'พักระหว่างไฟล์ (วินาที)', 'download_delay_seconds')):
+            self.add_field(timing, row, label, key)
+        self.add_field(timing, 4, 'พักติดตามตามเวลา', 'night_pause_enabled', boolean=True)
+        self.add_field(timing, 5, 'เวลาพัก / ลบไฟล์ (HH:MM)', 'cleanup_time')
+        self.add_field(timing, 6, 'เริ่มติดตามต่อ (HH:MM)', 'resume_time')
+        self.add_field(timing, 7, 'ลบไฟล์อัตโนมัติ', 'daily_cleanup_enabled', boolean=True)
+        ttk.Label(timing, text='เวลาไทย · รูปแบบ 24 ชั่วโมง').grid(row=8, column=0, columnspan=3, sticky='w', pady=8)
+        application = self.settings_sections['application']
+        self.add_field(application, 0, 'เริ่มติดตามเมื่อเปิดโปรแกรม', 'auto_start_tracking', boolean=True)
+        self.add_field(application, 1, 'เริ่มพร้อม Windows', 'start_with_windows', boolean=True)
+        self.add_field(application, 2, 'ซ่อนหน้าต่างเบราว์เซอร์', 'headless', boolean=True)
+        self.add_field(application, 3, 'รอหน้าเว็บสูงสุด (วินาที)', 'page_timeout_seconds')
+        self.add_field(application, 4, 'เมลสูงสุดต่อโฟลเดอร์', 'mail_watch.max_messages_per_folder')
+        self.add_field(application, 5, 'Chrome / Edge (ไม่บังคับ)', 'chrome_path', browse=True, file=True)
         buttons = ttk.Frame(page)
-        buttons.grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 12))
-        save = ttk.Button(buttons, text='บันทึกและเริ่มทำงาน', command=self.save_configuration)
+        buttons.grid(row=1, column=0, sticky='w', pady=(12, 6))
+        save = ttk.Button(buttons, text='บันทึก', command=self.save_configuration)
         save.pack(side="left")
         self.busy_buttons.append(save)
-        advanced = ttk.Button(buttons, text='ตัวเลือกเพิ่มเติม', command=self.advanced_settings)
-        advanced.pack(side="left", padx=10)
-        self.busy_buttons.append(advanced)
-        self.variables['start_with_windows'] = tk.BooleanVar(value=True)
-        startup = ttk.Checkbutton(buttons, text='เริ่มพร้อม Windows', variable=self.variables['start_with_windows'])
-        startup.pack(side='left', padx=10)
-        self.inputs.append(startup)
-        ttk.Label(page, textvariable=self.cleanup_status, wraplength=1050).grid(row=9, column=0, columnspan=3, sticky="w")
-
-    def advanced_settings(self) -> None:
-        window = tk.Toplevel(self.root)
-        window.title('ตัวเลือกเพิ่มเติม')
-        window.transient(self.root)
-        window.columnconfigure(1, weight=1)
-        fields = [('ตรวจเมลทุก (วินาที)', "mail_poll_seconds"), ('จำนวนเมลที่ตรวจต่อโฟลเดอร์', "mail_watch.max_messages_per_folder"),
-                  ('เวลารอหน้าเว็บ (วินาที)', "page_timeout_seconds"),
-                  ('พักระหว่างดาวน์โหลด (วินาที)', "download_delay_seconds"), ('ตำแหน่งเบราว์เซอร์ (ถ้ามี)', "chrome_path")]
-        local = {}
-        for row, (label, path) in enumerate(fields):
-            ttk.Label(window, text=label).grid(row=row, column=0, padx=12, pady=8, sticky="w")
-            local[path] = tk.StringVar(value=self.lookup(self.settings, path))
-            ttk.Entry(window, textvariable=local[path], width=48).grid(row=row, column=1, padx=12, pady=8, sticky="ew")
-        def apply():
-            try:
-                candidate = copy.deepcopy(self.settings)
-                for path, variable in local.items():
-                    old = self.lookup(candidate, path)
-                    self.assign(candidate, path, int(variable.get()) if isinstance(old, int) else variable.get().strip())
-                validate_settings(candidate, require_credentials=False)
-                self.settings = candidate
-                window.destroy()
-            except Exception as error:
-                messagebox.showerror('ตัวเลือกไม่ถูกต้อง', thai_text(str(error)), parent=window)
-        ttk.Button(window, text='นำไปใช้', command=apply).grid(row=len(fields), column=1, sticky="e", padx=12, pady=12)
+        save_start = ttk.Button(buttons, text='บันทึกและเริ่ม', command=lambda: self.save_configuration(start_after=True))
+        save_start.pack(side='left', padx=8)
+        self.busy_buttons.append(save_start)
+        self.notice_label = ttk.Label(buttons, text='')
+        self.notice_label.pack(side='left', padx=8)
+        ttk.Label(page, textvariable=self.cleanup_status, wraplength=1050).grid(row=2, column=0, sticky='w')
 
     @staticmethod
     def lookup(settings, path):
@@ -331,25 +330,38 @@ class Application(ttk.Frame):
                 value = MODES[value]
             elif isinstance(value, str) and not path.endswith("password"):
                 value = value.strip()
+                if type(self.lookup(result, path)) is int:
+                    try:
+                        value = int(value)
+                    except ValueError as error:
+                        raise ValueError(self.field_labels[path] + ': กรุณากรอกจำนวนเต็ม') from error
             self.assign(result, path, value)
         validate_settings(result, require_credentials=False)
         return result
 
-    def browse(self, variable):
-        path = filedialog.askdirectory(parent=self.root)
+    def browse(self, variable, file=False):
+        path = (filedialog.askopenfilename(parent=self.root, filetypes=[('โปรแกรม', '*.exe')]) if file else
+                filedialog.askdirectory(parent=self.root))
         if path:
             variable.set(path)
 
-    def save_configuration(self) -> None:
+    def save_configuration(self, start_after=False) -> None:
         try:
-            self.settings = self.collect_settings()
-            validate_settings(self.settings)
-            save_settings(self.settings)
+            candidate = self.collect_settings()
+            validate_settings(candidate, require_credentials=start_after)
+            save_settings(candidate)
+            self.settings = candidate
+            self.update_schedule()
             self.configure_background_startup()
-            self.notice_label.configure(text='บันทึกการตั้งค่าสำหรับผู้ใช้ Windows นี้แล้ว')
-            self.start("watch")
+            self.notice_label.configure(text='บันทึกแล้ว')
+            if start_after:
+                self.resume_tracking()
         except Exception as error:
             messagebox.showerror('บันทึกการตั้งค่าไม่ได้', thai_text(str(error)), parent=self.root)
+
+    def update_schedule(self):
+        if (self.background_clock.cleanup_time, self.background_clock.resume_time, self.background_clock.pause_enabled) != (self.settings['cleanup_time'], self.settings['resume_time'], self.settings['night_pause_enabled']):
+            self.background_clock = BackgroundClock(time.time(), self.settings)
 
     def configure_background_startup(self) -> None:
         """Configure user sign-in startup and retire only our legacy task."""
@@ -362,16 +374,15 @@ class Application(ttk.Frame):
             from .startup import configure_startup
             try:
                 if not (settings_home() / 'settings.json').is_file():
-                    message = 'บันทึกการตั้งค่าก่อน · ปิดหน้าต่างเพื่อทำงานเบื้องหลัง · พัก 22:00 ถึง 05:00'
+                    message = 'กรุณาบันทึกการตั้งค่า'
                 else:
                     message = configure_startup(settings['start_with_windows'])
                     try:
                         configure_task(False)
                     except Exception:
-                        message += ' · งานตั้งเวลาเดิมไม่ถูกลบ แต่คำสั่งเดิมจะไม่ลบไฟล์อีก'
-                    message += ' · ลบ 22:00 / ติดตามเมลต่อ 05:00 · ต้องเปิดเครื่องและคงโปรแกรมไว้ในถาดระบบ'
+                        pass  # The retired CLI action is harmless; migration does not affect the timer.
             except Exception as error:
-                message = f'ตั้งค่าเริ่มพร้อม Windows ไม่สำเร็จ: {thai_text(error)} · ตัวจับเวลาในโปรแกรมยังทำงาน'
+                message = f'เริ่มพร้อม Windows ไม่สำเร็จ: {thai_text(error)}'
             self.events.put(('cleanup_task', message))
         threading.Thread(target=work, name='KDE-startup-setup', daemon=True).start()
 
@@ -397,7 +408,8 @@ class Application(ttk.Frame):
         self.root.deiconify()
         self.root.lift()
         self.hide_passwords()
-        self.resume_tracking()
+        if self.settings.get('auto_start_tracking', True):
+            self.resume_tracking()
 
     def resume_tracking(self, manual=True):
         if self.closing:
@@ -438,15 +450,18 @@ class Application(ttk.Frame):
                     raise RuntimeError('อ่านการตั้งค่าไม่ได้ จึงไม่ลบไฟล์')
                 validate_settings(saved, require_credentials=False)
                 code = run_scheduled_cleanup(saved, self.maintenance_stop)
-                message = 'ตรวจงานลบ 22:00 แล้ว · ดูผลในประวัติ · พักถึง 05:00' if code == 0 else 'งานลบ 22:00 ไม่ครบ กรุณาดูประวัติ'
+                message = 'จบงานลบไฟล์' if code == 0 else 'ลบไฟล์ไม่ครบ ดูประวัติ'
                 self.events.put(('maintenance_result', message))
             except Exception as error:
-                self.events.put(('maintenance_result', f'ลบไฟล์ 22:00 ไม่สำเร็จ: {thai_text(error)}'))
+                self.events.put(('maintenance_result', f'ลบไฟล์ไม่สำเร็จ: {thai_text(error)}'))
         self.maintenance_worker = threading.Thread(target=work, name='KDE-maintenance', daemon=False)
         self.maintenance_worker.start()
 
     def auto_start(self, force=False) -> None:
         if self.smoke and not force:
+            return
+        if not force and not self.settings.get('auto_start_tracking', True):
+            self.status.set('พร้อมใช้งาน')
             return
         try:
             validate_settings(self.collect_settings())
@@ -530,6 +545,7 @@ class Application(ttk.Frame):
             validate_settings(settings, require_credentials=mode not in {"scan", "check", "retry"})
             save_settings(settings)
             self.settings = settings
+            self.update_schedule()
         except Exception as error:
             self.tabs.select(self.settings_page)
             messagebox.showerror('เริ่มทำงานไม่ได้', thai_text(str(error)), parent=self.root)
@@ -544,7 +560,7 @@ class Application(ttk.Frame):
             self.requests.put({'kind': 'resume_tracking'})
         self.resume_manual = False
         self.mail_health = {}
-        self.mail_status.set('การตรวจเมล: กำลังเริ่มตรวจทุกโฟลเดอร์ขาเข้าของกล่องที่ตั้งค่าไว้')
+        self.mail_status.set('กำลังเริ่มตรวจเมล')
         self.set_busy(True)
         self.tabs.select(self.monitor_page)
         self.status.set('กำลังเริ่มทำงาน' if mode in {"watch", "requeue"} else 'กำลังตรวจสอบ')
@@ -671,7 +687,7 @@ class Application(ttk.Frame):
             if self.mail_health.get('error'):
                 self.mail_status.set(f"ตรวจเมล {checked} · ต้องตรวจสอบ: {thai_text(self.mail_health['error'])[:190]}")
             else:
-                prefix = f"ตรวจเมลล่าสุด {checked} · เมลวันนี้ {self.mail_health.get('count', 0)} ฉบับ · ทุกโฟลเดอร์ขาเข้า"
+                prefix = f"ตรวจเมลล่าสุด {checked} · เมลวันนี้ {self.mail_health.get('count', 0)} ฉบับ"
                 waiting = self.jobs.get('pending-daily-round')
                 if waiting:
                     remaining = max(0, int(waiting['due'] - time.time()))
@@ -680,9 +696,9 @@ class Application(ttk.Frame):
                     suffix = 'กำลังดาวน์โหลด' if any(job['status'] == 'running' for job in ordered) else 'รอเมลใหม่'
                 self.mail_status.set(prefix + ' · ' + suffix)
         if self.schedule_paused:
-            self.mail_status.set('พักติดตามเมลถึง 05:00 · เปิด KDE เพื่อเริ่มก่อนเวลาได้ · รอให้งานปัจจุบันจบก่อนลบไฟล์')
+            self.mail_status.set(f"พักถึง {self.settings['resume_time']}")
         elif self.stop_event.is_set():
-            self.mail_status.set('หยุดติดตามเมลแล้ว · ตัวจับเวลาลบ 22:00 และเริ่มใหม่ 05:00 ยังทำงานเมื่อโปรแกรมอยู่เบื้องหลัง')
+            self.mail_status.set('หยุดติดตามเมล')
 
     def render_activity(self) -> None:
         search = self.filter.get().casefold()
@@ -866,6 +882,21 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
             app.variables['daily_cleanup_enabled'].set(False)
             cleanup_toggle_passed &= app.collect_settings()['daily_cleanup_enabled'] is False
             app.variables['daily_cleanup_enabled'].set(True)
+            original_settings = copy.deepcopy(app.settings)
+            for key, value in {'mail_delay_seconds': 90, 'login_retry_seconds': 20,
+                               'cleanup_time': '21:15', 'resume_time': '06:20'}.items():
+                app.variables[key].set(value)
+            with patch.object(app, 'resume_tracking') as resume:
+                app.save_configuration()
+                save_only_passed = resume.call_count == 0
+            saved_settings, _notices = load_settings()
+            timing_roundtrip = (saved_settings['mail_delay_seconds'] == 90 and saved_settings['login_retry_seconds'] == 20
+                                and saved_settings['cleanup_time'] == '21:15' and saved_settings['resume_time'] == '06:20'
+                                and app.background_clock.cleanup_time == '21:15')
+            app.settings = original_settings
+            save_settings(original_settings)
+            app.fill_settings()
+            app.update_schedule()
             from types import SimpleNamespace
             ready = threading.Event()
             ready.set()
@@ -888,12 +919,17 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                 ImageGrab.grab().crop((root.winfo_rootx(), root.winfo_rooty(), root.winfo_rootx() + root.winfo_width(), root.winfo_rooty() + root.winfo_height())).save(path)
             screenshot(app.monitor_page, smoke_screenshot)
             screenshot(app.settings_page, smoke_screenshot.with_name(smoke_screenshot.stem + "-settings.png"))
+            for key, section in app.settings_sections.items():
+                app.settings_tabs.select(section)
+                screenshot(app.settings_page, smoke_screenshot.with_name(smoke_screenshot.stem + f'-settings-{key}.png'))
             screenshot(app.activity_page, smoke_screenshot.with_name(smoke_screenshot.stem + "-history.png"))
             report = {"gui_started": True, "version": VERSION, "language": "th", "tab_count": len(app.tabs.tabs()),
                       "window_icon_applied": window_icon_applied, "header_icon_applied": app.brand_icon is not None,
                       "activity_rows": len(app.activity_table.get_children()), "mail_queue_rows": len(app.job_table.get_children()),
                       "error_rows": 1, "fixed_step_checklist": False, "theme_selector": False, "account_folder_overrides": False,
                       "history_search_passed": search_passed, "readable_event_details": details_passed, "auto_start_passed": auto_started,
+                      "settings_section_count": len(app.settings_sections), "editable_timing_roundtrip": timing_roundtrip,
+                      "save_without_start_passed": save_only_passed,
                       "password_toggle_passed": bool(password_toggle_passed), "stop_control_passed": stop_passed,
                       "mail_delay_seconds": app.settings["mail_delay_seconds"], "login_retry_seconds": app.settings["login_retry_seconds"],
                       "max_session_attempts": None, "today_only": app.settings["mail_watch"]["today_only"],

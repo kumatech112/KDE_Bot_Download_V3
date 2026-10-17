@@ -1,3 +1,11 @@
+# KDE Bot Download V3 — 3.8.0
+
+- Group settings into Accounts, Storage, Timing and Application; remove the separate Advanced window and general explanatory banners.
+- Add Save without starting, plus Save & Start. Retain encrypted credentials and existing storage preferences.
+- Make mail delay, login retry, polling, spacing, pause/cleanup/resume times configurable; apply selected values throughout queue recovery, busy retry, cooldown and maintenance. Defaults stay unchanged.
+- Add automatic-tracking and timed-pause switches; expose browser visibility/path, web timeout and mailbox scan limit. Explicit Chrome/Edge selection takes precedence over the bundle.
+- Preserve today-only sequential 30-row downloads, .97 duplicate detection, all-folder cleanup protection, shared locks and same-day deletion history.
+
 # KDE Bot Download V3 — 3.7.0
 
 - Replace scheduled cleanup with a tray-based maintenance clock. X hides KDE; explicit full exit stops it.

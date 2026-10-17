@@ -62,7 +62,7 @@ def main() -> int:
     candidate = validate_bundle(Path(metadata["exe"]).parent, metadata["sha256"])
     if candidate.name == "portable":
         raise ValueError("The replacement must be staged before promotion")
-    for name in ("packaged-check-3.1.json", "gui-3.1.json", "background-3.7.0.json"):
+    for name in ("packaged-check-3.1.json", "gui-3.1.json", f"background-{metadata['version']}.json"):
         report = json.loads((ROOT / "docs/verification" / name).read_text(encoding="utf-8"))
         if report.get("exe_sha256") != metadata["sha256"] or report.get("live_portal_access") is not False:
             raise ValueError("Actual executable verification is missing or belongs to another bundle")
@@ -87,6 +87,8 @@ def main() -> int:
                                        or not report.get("window_icon_applied") or not report.get("header_icon_applied")
                                        or report.get('task_scheduler_required') is not False
                                        or report.get('close_to_tray') is not True or report.get('manual_open_resumes') is not True
+                                       or report.get('settings_section_count') != 4
+                                       or report.get('editable_timing_roundtrip') is not True or report.get('save_without_start_passed') is not True
                                        or report.get('tracking_pause') != '22:00' or report.get('tracking_resume') != '05:00'):
             raise ValueError("Packaged GUI verification failed")
     old = validate_bundle(ROOT / "portable", arguments.expected_old_sha)

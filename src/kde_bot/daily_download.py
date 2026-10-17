@@ -248,7 +248,7 @@ class DailyDownloader(StructuredDownloader):
             try:
                 from .cleanup import was_cleaned
                 if was_cleaned(self.delivery.history, filename, self.work_day):
-                    self.reporter.emit(9, 'skipped', 'ไฟล์นี้ถูกลบตามรอบ 22:00 แล้ว จึงไม่ดาวน์โหลดกลับมาอีกในวันนี้',
+                    self.reporter.emit(9, 'skipped', 'ไฟล์นี้ถูกลบตามเวลาแล้ว ข้ามการดาวน์โหลดในวันนี้',
                                        account.label, filename, persist=True, count=True)
                     return 'skipped'
                 existing = self.delivery.existing(Path(self.configuration["new_dir"]), filename)
@@ -303,16 +303,16 @@ class DailyQueue:
                     job.update(status="expired", last_reason="Account removed or disabled in Settings.")
                     continue
                 if job["status"] == "running":
-                    job.update(status="waiting", due=max(now, min(job["due"], now + 60)),
+                    job.update(status="waiting", due=max(now, min(job["due"], now + self.settings['login_retry_seconds'])),
                                last_reason="งานถูกขัดจังหวะ เก็บจำนวนครั้งและเวลารอเดิมไว้")
                 if job.get("flow_version") != 5 and job["status"] == "waiting":
                     # Upgrade may lengthen a pending old 70-second trigger once, never on each restart.
                     if not job.get("busy_sources"):
-                        job["due"] = max(job["due"], now + 270)
+                        job["due"] = max(job["due"], now + self.settings['mail_delay_seconds'])
                     job["flow_version"] = 5
             if self.state.get("flow_version") != 5:
                 if self.state["pending_due"] is not None:
-                    self.state["pending_due"] = max(self.state["pending_due"], now + 270)
+                    self.state["pending_due"] = max(self.state["pending_due"], now + self.settings['mail_delay_seconds'])
                 self.state["flow_version"] = 5
             self.history.save()
 
@@ -330,7 +330,7 @@ class DailyQueue:
                     added += 1
             if added:
                 self.state["seen"] = sorted(seen)
-                deadline = now + 270
+                deadline = now + self.settings['mail_delay_seconds']
                 self.state["pending_due"] = min(self.state["pending_due"], deadline) if self.state["pending_due"] is not None else deadline
                 self.history.save()
             return added
@@ -338,7 +338,8 @@ class DailyQueue:
     def request_round(self, now):
         self.roll_day()
         with self.history.lock:
-            self.state["pending_due"] = min(self.state["pending_due"], now + 270) if self.state["pending_due"] is not None else now + 270
+            deadline = now + self.settings['mail_delay_seconds']
+            self.state["pending_due"] = min(self.state["pending_due"], deadline) if self.state["pending_due"] is not None else deadline
             self.history.save()
 
     def claim(self, now):
@@ -362,7 +363,7 @@ class DailyQueue:
             ready = []
             for job in jobs.values():
                 if job["status"] == "waiting" and job["due"] <= now:
-                    job.update(status="running", attempts=job["attempts"] + 1, due=now + 60)
+                    job.update(status="running", attempts=job["attempts"] + 1, due=now + self.settings['login_retry_seconds'])
                     ready.append(copy.deepcopy(job))
                     break  # Exactly one account may acquire a browser session.
                 if job["status"] == "waiting":
@@ -381,12 +382,12 @@ class DailyQueue:
             elif outcome["kind"] == "complete":
                 job["status"] = "complete"
                 if self.state["pending_due"] is not None:
-                    self.state["pending_due"] = max(self.state["pending_due"], now + 270)
+                    self.state["pending_due"] = max(self.state["pending_due"], now + self.settings['mail_delay_seconds'])
             elif outcome["kind"] == "credentials":
                 job["status"] = "review"
                 self.blocked.add(username)
             elif outcome["kind"] in {"account_busy", "login_failed"} or stopped:
-                job.update(status="waiting", due=now + 60)
+                job.update(status="waiting", due=now + self.settings['login_retry_seconds'])
                 if outcome["kind"] == "account_busy":
                     job["busy_sources"] = [username]
             else:
@@ -400,7 +401,7 @@ class DailyQueue:
             if self.state["pending_due"] is not None:
                 rows.append({"id": "pending-daily-round", "account": "", "label": "Pre + Post", "status": "waiting", "attempts": 0,
                              "due": self.state["pending_due"], "sequence": self.state["sequence"] + 1,
-                             "subject": "รอบถัดไปจากเมลใหม่", "lookup": {}, "last_reason": "รอ 4 นาที 30 วินาที เปิดใช้งานบัญชีทีละบัญชี"})
+                             "subject": "รอบถัดไปจากเมลใหม่", "lookup": {}, "last_reason": f"รอ {self.settings['mail_delay_seconds']} วินาที"})
             return rows
 
 
@@ -453,7 +454,7 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
     last_scan_problem = None
     first_scan = True
     cleanup = DailyCleanup(settings, history, reporter, time.time()) if watch else None
-    hours = TrackingHours(history)
+    hours = TrackingHours(history, settings)
     previous_paused = None
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="KDE-daily") as pool:
         while not stop_event.is_set():
@@ -490,14 +491,14 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
                     reporter.callback({"kind": "mail_health", "checked": time.time(), "count": len(arrivals),
                                        "folders": getattr(arrivals, "folders", None), "new": added, "error": problem})
                     if first_scan or (last_scan_problem and not problem):
-                        reporter.emit(2, "notice", f"อ่านกล่องเมล {settings['mail_watch']['mailbox_filter']} ทุกโฟลเดอร์ขาเข้าแล้ว พบเมลวันนี้ {len(arrivals)} ฉบับ ตรวจทุก {settings['mail_poll_seconds']} วินาที ไม่ตรวจหัวเรื่องหรือชื่อไฟล์")
+                        reporter.emit(2, "notice", f"ตรวจเมลวันนี้ {len(arrivals)} ฉบับ")
                     if problem and problem != last_scan_problem:
                         reporter.emit(2, "warning", problem, persist=True)
                     last_scan_problem = problem
                     first_scan = False
                     if added:
                         due = datetime.fromtimestamp(pending.state['pending_due'], BANGKOK).strftime('%H:%M:%S')
-                        reporter.emit(2, "waiting", f"พบเมลใหม่ {added} ฉบับ เข้าคิวดาวน์โหลดเวลา {due} หลังรอ 4 นาที 30 วินาที", persist=True)
+                        reporter.emit(2, "waiting", f"เมลใหม่ {added} ฉบับ · เริ่ม {due}", persist=True)
                 except Exception as error:
                     reporter.callback({"kind": "mail_health", "checked": time.time(), "error": str(error)})
                     reporter.emit(2, "error", str(error), persist=True, count=True)
@@ -515,7 +516,7 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
             if requests is not None and signature != last_snapshot:
                 reporter.callback({"kind": "queue", "jobs": rows})
                 last_snapshot = signature
-            summary = ('พักติดตามเมลถึง 05:00 · เปิด KDE เพื่อเริ่มก่อนเวลาได้' if paused else
+            summary = (f"พักถึง {settings.get('resume_time', '05:00')}" if paused else
                        f"ติดตามเมล data · ไฟล์วันที่ปัจจุบัน · กำลังใช้งาน {len(active)} บัญชีจาก 2 บัญชี")
             if summary != last_summary:
                 reporter.emit(2, "summary", summary)

@@ -97,6 +97,7 @@ def test_manual_resume_cannot_publish_state_during_another_history_write(tmp_pat
 def app_shell():
     app = object.__new__(Application)
     app.root = Mock()
+    app.settings = default_settings()
     app.smoke = False
     app.closing = False
     app.worker = None
@@ -232,7 +233,7 @@ def test_startup_preference_migrates_without_losing_existing_settings():
     assert settings['start_with_windows'] is False
     assert normalize_settings({})['start_with_windows'] is True
     settings['start_with_windows'] = 'yes'
-    with pytest.raises(ValueError, match='startup'):
+    with pytest.raises(ValueError, match='start_with_windows|startup'):
         validate_settings(settings, require_credentials=False)
 
 

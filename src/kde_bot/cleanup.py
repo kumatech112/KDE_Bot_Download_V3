@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .evidence import BANGKOK
+from .schedule import scheduled_time
 
 
 APPROVED_ROOTS = (r"\\10.0.0.243\pgp-data$", r"\\10.0.0.97\Z Bot KDE")
@@ -105,7 +106,7 @@ def cleanup_root(root, reporter, stop_event, day, before_delete, after_delete, f
             child.unlink()
             after_delete(child.name)
             result['deleted'] += 1
-            reporter.emit(9, 'stage_complete', f'ลบไฟล์ตามเวลา 22:00 วันที่ {day} แล้ว', filename=child.name,
+            reporter.emit(9, 'stage_complete', 'ลบไฟล์แล้ว', filename=child.name,
                           account=label, destination=str(root), persist=True)
         except Exception as error:
             failed_delete(child.name)
@@ -125,14 +126,14 @@ class DailyCleanup:
         self.wait_reported = False
         self.next_request_check = 0
         moment = datetime.fromtimestamp(now, BANGKOK)
-        deadline = moment.replace(hour=22, minute=0, second=0, microsecond=0)
+        deadline = scheduled_time(moment, settings.get('cleanup_time', '22:00'))
         # Starting after today's scheduled time never performs a surprise catch-up.
         if moment > deadline:
             deadline += timedelta(days=1)
         self.due = deadline.timestamp()
         previous = history.data.get('daily_cleanup', {})
         if previous.get('status') == 'running':
-            reporter.emit(9, 'warning', 'การลบไฟล์ครั้งก่อนถูกขัดจังหวะ จะไม่ลบชดเชยย้อนหลัง และจะรอเวลา 22:00 รอบถัดไป', persist=True)
+            reporter.emit(9, 'warning', 'งานลบครั้งก่อนถูกขัดจังหวะ รอรอบถัดไป', persist=True)
 
     def requested_today(self):
         try:
@@ -149,25 +150,26 @@ class DailyCleanup:
         if not self.settings.get('daily_cleanup_enabled', True) or stop_event.is_set():
             return False
         moment = datetime.fromtimestamp(now, BANGKOK)
+        deadline = scheduled_time(moment, self.settings.get('cleanup_time', '22:00'))
         if self.history.data.get('daily_cleanup', {}).get('day') == moment.date().isoformat():
             return False
         if now < self.due:
-            if moment.hour < 22 or now < self.next_request_check:
+            if moment < deadline or now < self.next_request_check:
                 return False
             self.next_request_check = now + 5
             if not self.requested_today():
                 return False
-            self.due = moment.replace(hour=22, minute=0, second=0, microsecond=0).timestamp()
+            self.due = deadline.timestamp()
         scheduled = datetime.fromtimestamp(self.due, BANGKOK)
         if moment.date() != scheduled.date():
             # Machine asleep/offline across midnight: do not clean the new day's files.
-            self.due = moment.replace(hour=22, minute=0, second=0, microsecond=0).timestamp()
+            self.due = deadline.timestamp()
             if self.due < now:
                 self.due += 86400
             return False
         if active:
             if not self.wait_reported:
-                self.reporter.emit(9, 'waiting', 'ถึงเวลา 22:00 รอให้การดาวน์โหลดและออกจากระบบเสร็จก่อนลบไฟล์', persist=True)
+                self.reporter.emit(9, 'waiting', 'รอให้งานปัจจุบันเสร็จก่อนลบไฟล์', persist=True)
                 self.wait_reported = True
             return True  # Do not start the next account before cleanup.
         day = scheduled.date().isoformat()
@@ -179,7 +181,8 @@ class DailyCleanup:
         return False
 
     def run(self, day, stop_event):
-        if current_time().date().isoformat() != day or current_time().hour < 22:
+        moment = current_time()
+        if moment.date().isoformat() != day or moment < scheduled_time(moment, self.settings.get('cleanup_time', '22:00')):
             return
         if self.history.data.get('daily_cleanup', {}).get('day') == day:
             return
@@ -188,7 +191,7 @@ class DailyCleanup:
         with self.history.lock:
             self.history.data['daily_cleanup'] = record
             self.history.save()  # A restart must not repeat deletion against new arrivals.
-        self.reporter.emit(9, 'running', 'เริ่มลบไฟล์เวลา 22:00 เฉพาะไฟล์ชั้นนอกของ .243 และ .97 เก็บทุกโฟลเดอร์และไฟล์ข้างในไว้')
+        self.reporter.emit(9, 'running', 'เริ่มลบไฟล์ตามเวลา')
 
         def before_delete(filename):
             with self.history.lock:
@@ -224,7 +227,7 @@ class DailyCleanup:
         deleted = sum(item['deleted'] for item in record['roots'].values())
         errors = sum(item['errors'] for item in record['roots'].values())
         self.reporter.emit(9, 'stage_complete' if record['status'] == 'complete' else 'warning',
-                           f"จบรอบลบไฟล์ 22:00 วันที่ {day} ลบ {deleted} ไฟล์ ผิดพลาด {errors} เก็บทุกโฟลเดอร์รวม Check ไว้" + (' หยุดก่อนลบครบ' if record['status'] == 'stopped' else ''), persist=True)
+                           f"ลบ {deleted} ไฟล์ · ผิดพลาด {errors}" + (' · หยุดก่อนครบ' if record['status'] == 'stopped' else ''), persist=True)
         path = request_path(self.settings)
         if path.is_file() and self.requested_today():
             path.unlink()
@@ -238,7 +241,7 @@ def run_scheduled_cleanup(settings, stop_event=None):
     if not settings.get('daily_cleanup_enabled', True):
         return 0
     moment = current_time()
-    if moment.hour < 22:
+    if moment < scheduled_time(moment, settings.get('cleanup_time', '22:00')):
         return 0  # Never allow a manual/early task run to delete files.
     day = moment.date().isoformat()
     path = request_path(settings)

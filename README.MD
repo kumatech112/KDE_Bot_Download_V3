@@ -1,4 +1,8 @@
-# KDE Download — 3.7.0
+# KDE Download — 3.8.0
+
+Settings now have four Thai sections: **บัญชี** (accounts/mailbox), **จัดเก็บ** (destinations/history), **เวลา** (mail delay, login retry, polling, file spacing, pause/cleanup/resume), and **โปรแกรม** (automatic tracking, Windows startup, browser visibility/path, timeout and mail limit). **บันทึก** saves without starting a worker; **บันทึกและเริ่ม** saves and starts tracking. Stop the worker before editing.
+
+The default policy remains 270 seconds after mail, 60-second login retry, cleanup/pause at 22:00 and resume at 05:00 Bangkok. These times are now editable and persist without being reset. Existing pending deadlines are preserved; new settings govern future scheduling. Turning off timed pause allows continuous tracking; deletion and Windows startup have separate switches. The main screen omits general instructions and retains status, countdowns and actionable errors.
 
 Thai Windows GUI with การทำงาน (Monitor), ประวัติการทำงาน (History) and ตั้งค่า (Settings). Open **portable\KDE Bot Download V3.exe**; keep **_internal** beside it. The pinned browser is included. Python and OCR are not required on the deployment computer.
 

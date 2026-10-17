@@ -631,6 +631,37 @@ def check_desktop_instance() -> None:
         reopened.close()
 
 
+def check_custom_preferences(root: Path) -> None:
+    from .daily_download import DailyQueue
+    from .schedule import BackgroundClock, TrackingHours
+    from .evidence import BANGKOK, today
+    from .settings import validate_settings
+    settings = default_settings()
+    settings.update(mail_delay_seconds=90, login_retry_seconds=20, cleanup_time='21:15', resume_time='06:20')
+    for index, account in enumerate(settings['accounts']):
+        account['username'] = f'offline-preference-{index}'
+    path = root / 'custom-preferences.json'
+    save_settings(settings, path)
+    loaded, notices = load_settings(path)
+    validate_settings(loaded, require_credentials=False)
+    assert not notices and loaded['mail_delay_seconds'] == 90 and loaded['login_retry_seconds'] == 20
+    folder = root / 'custom-preference-history'
+    folder.mkdir()
+    history = History(folder)
+    pending = DailyQueue(history, loaded)
+    pending.ingest([{'entry_id': 'offline-pref', 'store_id': 'offline', 'received': today() + 'T08:00:00'}], 100)
+    assert pending.claim(189) == []
+    job = pending.claim(190)[0]
+    pending.finish(job['account'], {'kind': 'account_busy', 'reason': 'offline busy'}, 191)
+    assert pending.claim(210) == [] and pending.claim(211)[0]['attempts'] == 2
+    before = datetime(2026, 10, 17, 21, 14, 59, tzinfo=BANGKOK).timestamp()
+    clock = BackgroundClock(before, loaded)
+    hours = TrackingHours(history, loaded)
+    assert clock.tick(before + 1) == ['cleanup'] and not hours.allowed(before + 1)
+    resume = datetime(2026, 10, 18, 6, 20, tzinfo=BANGKOK).timestamp()
+    assert clock.tick(resume) == ['resume'] and hours.allowed(resume)
+
+
 def check_native_tray() -> None:
     import queue
     import win32con
@@ -889,6 +920,8 @@ def run_self_check(output: Path) -> int:
             result['checks'].append('22:00 cleanup in temporary roots only; all folders preserved; active-download wait; persistent no-redownload names; background maintenance idempotence; no scheduled task')
             check_background_schedule(root)
             result['checks'].append('Bangkok pause 22:00 / resume 05:00; persisted manual overnight override; next-night reset; missed-night cleanup skipped')
+            check_custom_preferences(root)
+            result['checks'].append('Saved custom 90-second mail delay and 20-second login retry drive the queue; custom 21:15/06:20 timers drive pause/resume; isolated settings/history only')
             check_desktop_instance()
             result['checks'].append('Native isolated Windows instance mutex and reopen event; no duplicate instance; release permits restart')
             check_native_tray()
