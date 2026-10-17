@@ -439,6 +439,7 @@ def run_daily_account(settings, job, stop_event, reporter, history, temporary):
 
 def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch, requests=None, request_round=False):
     from .cleanup import DailyCleanup
+    from .schedule import TrackingHours
 
     reporter.file_key = exact_record_key
     pending = DailyQueue(history, settings)
@@ -452,6 +453,8 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
     last_scan_problem = None
     first_scan = True
     cleanup = DailyCleanup(settings, history, reporter, time.time()) if watch else None
+    hours = TrackingHours(history)
+    previous_paused = None
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="KDE-daily") as pool:
         while not stop_event.is_set():
             now = time.time()
@@ -469,8 +472,16 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
                     except queue.Empty:
                         break
                     if command["kind"] == "retry":
+                        hours.resume_manually(time.time())
                         pending.request_round(time.time())
-            if now >= next_scan:
+                    elif command["kind"] == "resume_tracking":
+                        hours.resume_manually(time.time())
+            paused = watch and not hours.allowed(time.time())
+            if paused != previous_paused:
+                reporter.callback({'kind': 'schedule_status', 'paused': paused})
+                previous_paused = paused
+                next_scan = 0
+            if not paused and now >= next_scan:
                 try:
                     arrivals = scan_arrivals(settings, stop_event)
                     added = pending.ingest(arrivals, time.time())
@@ -494,7 +505,9 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
                         break
                 next_scan = time.time() + settings["mail_poll_seconds"]
             cleanup_waiting = cleanup.tick(time.time(), bool(active), stop_event) if cleanup is not None else False
-            if not active and not cleanup_waiting and not stop_event.is_set():
+            # Outlook and cleanup can block across 22:00; never claim using a stale gate.
+            paused = watch and not hours.allowed(time.time())
+            if not paused and not active and not cleanup_waiting and not stop_event.is_set():
                 for job in pending.claim(time.time()):
                     active[job["account"]] = pool.submit(run_daily_account, settings, job, stop_event, reporter, history, temporary)
             rows = pending.snapshot()
@@ -502,7 +515,8 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
             if requests is not None and signature != last_snapshot:
                 reporter.callback({"kind": "queue", "jobs": rows})
                 last_snapshot = signature
-            summary = f"ติดตามเมล data · ไฟล์วันที่ปัจจุบัน · กำลังใช้งาน {len(active)} บัญชีจาก 2 บัญชี"
+            summary = ('พักติดตามเมลถึง 05:00 · เปิด KDE เพื่อเริ่มก่อนเวลาได้' if paused else
+                       f"ติดตามเมล data · ไฟล์วันที่ปัจจุบัน · กำลังใช้งาน {len(active)} บัญชีจาก 2 บัญชี")
             if summary != last_summary:
                 reporter.emit(2, "summary", summary)
                 last_summary = summary

@@ -306,7 +306,7 @@ def test_concurrent_request_writers_leave_valid_atomic_request(context):
 
 
 @pytest.mark.parametrize('corrupt', [False, True])
-def test_scheduled_entry_rejects_missing_or_corrupt_user_settings_without_deleting(context, tmp_path, corrupt):
+def test_retired_scheduled_entry_never_reads_settings_or_deletes(context, tmp_path, corrupt):
     from main import scheduled_cleanup_entry
     settings, history, reporter, events, clock, stop = context
     local = tmp_path / 'local'
@@ -315,8 +315,8 @@ def test_scheduled_entry_rejects_missing_or_corrupt_user_settings_without_deleti
         (local / 'settings.json').write_text('{broken', encoding='utf-8')
     with patch('kde_bot.cleanup_task.on_cleanup_machine', return_value=True), \
             patch('kde_bot.cleanup.run_scheduled_cleanup', side_effect=AssertionError('Invalid settings allowed deletion')):
-        assert scheduled_cleanup_entry() == 1
-    assert json.loads((local / 'cleanup_task_result.json').read_text(encoding='utf-8'))['exit_code'] == 1
+        assert scheduled_cleanup_entry() == 0
+    assert not (local / 'cleanup_task_result.json').exists()
 
 
 @pytest.mark.parametrize('outer,details,expected', [

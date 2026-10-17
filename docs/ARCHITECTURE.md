@@ -1,4 +1,33 @@
-# KDE 3.6.1 data flow and changed functions
+# KDE 3.7.0 data flow and changed functions
+
+## 3.7.0 background workflow (supersedes scheduled-task flows below)
+
+Normal/manual launch → per-user/session native mutex → show existing Tk instance via event or create one → Thai GUI + native tray + BackgroundClock. Sign-in startup uses the same EXE with --background, never signaling an existing instance. Mail metadata → persisted queue → 270-second delay → serial Pre/Post current-day page downloads remains unchanged. At 22:00 TrackingHours blocks new scans/claims but lets the active future finish; DailyCleanup and the GUI maintenance thread cooperate through the existing Log request/WorkerLock. At 05:00 the gate opens; if the tracker was stopped, the GUI starts it again. A manual reopening overrides only that overnight interval. Midnight queue expiration and cleanup tombstones still prevent old-day restoration.
+
+| File | Functions/classes | Change |
+|---|---|---|
+| schedule.py | overnight_key | Bangkok 22:00-inclusive / 05:00-exclusive night identity, shared across midnight |
+| schedule.py | TrackingHours.__init__, resume_manually, allowed | Persist manual resume under the shared History lock; additive state; automatically expire it next night |
+| schedule.py | BackgroundClock.__init__, next_hour, tick | Independent 22:00 cleanup / 05:00 restart clock; single firing; skip missed-night deletion |
+| desktop.py | DesktopInstance.__init__, notify, requested, close | Native per-profile/user-session mutex and one-shot reopen event; no extra files or duplicate GUI |
+| desktop.py | TrayIcon.__init__, start, run, window_message, close | Native tray lifecycle, Thai menu/show/full-exit events, Explorer restart recovery, early-shutdown handling; callbacks queue to Tk |
+| startup.py | configure_startup | Only own HKCU Run value; .97/stable-portable guard; background startup; no privilege/password; refuse conflicting value |
+| main.py | scheduled_cleanup_entry | Legacy scheduled action is a no-op, even if old-task removal is denied |
+| main.py | main | --background and native instance ownership; manual duplicate signals existing window; self-check/smoke remain isolated |
+| daily_download.py | run_daily_monitor | Finish active work before night pause; gate scans and new claims only; recheck time after blocking scan/cleanup; manual resume command; schedule-status events |
+| gui.py | Application.__init__, build_controls, build_settings, save_configuration | Tray/runtime state; Thai full-exit control and independent startup preference |
+| gui.py | configure_background_startup | Set user startup; best-effort removal of exact own legacy task, never register another task |
+| gui.py | start_tray, check_tray_ready, show_window, resume_tracking | Background startup, tray failure visibility, early manual resume without forcing a download round; defer resume while stopping/cleaning |
+| gui.py | start_maintenance | Independent non-daemon maintenance worker; .97/saved-valid-settings guards; existing lock-cooperative cleanup, even when tracker stopped |
+| gui.py | start, retry_failed, drain_events, accept_event, render_jobs, tick | Preserve worker mode; handle maintenance/tray/pause events; independent clock and instance polling; no new worker during cleanup |
+| gui.py | close, exit_fully, wait_to_close, launch/capture | X hides without Stop; explicit full exit stops both workers and removes tray before Tk destruction; smoke verifies hide/reopen without real startup |
+| settings.py | default_settings, validate_settings | Additive start_with_windows boolean; preserve existing accounts and preferences |
+| storage.py | History.__init__ | Validate optional manual-night date without resetting corrupt state or changing schema 3 |
+| selfcheck.py | check_background_schedule, check_desktop_instance, check_native_tray, check_daily_cleanup, run_self_check | Offline boundary/native lifecycle checks; no active Scheduler dependency or registration; deletion only in temporary roots |
+| tools/promote_portable.py | main | Require actual executable GUI proof of tray/manual-open/22:00/05:00 policies and matching-hash end-to-end background report before promotion |
+| tools/verify_background.py | windows_for, wait_until, verify, main | Isolated real-EXE startup/duplicate/manual-reopen/X/tray-exit checks; native windows restricted to the spawned test PID; reject the production stable bundle when testing on .97; no production profile or valid credentials |
+
+Full Exit/off/sleep/sign-out cannot run in-process deadlines. X and Stop retain the maintenance clock; a failed tray stays visible. Startup registration and legacy task removal occur only on normal .97 stable-portable launch, never in verification. Other applications, credentials, business destinations and monthly logging remain unchanged. Historical implementation notes follow for provenance and do not describe current task scheduling.
 
 ## 3.6.1 first-run setup fix
 

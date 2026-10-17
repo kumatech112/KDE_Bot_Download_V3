@@ -543,10 +543,7 @@ def check_scheduler_missing_task() -> None:
 def check_daily_cleanup(root: Path) -> None:
     from datetime import timedelta
     from . import cleanup
-    from .cleanup_task import task_definition
     from .evidence import BANGKOK
-    import win32com.client
-    import win32security
 
     settings = default_settings()
     for key in ('original_dir', 'new_dir', 'log_dir'):
@@ -587,15 +584,72 @@ def check_daily_cleanup(root: Path) -> None:
         assert not headless.exists() and not cleanup.request_path(settings).exists()
         assert History(history.folder).data['daily_cleanup']['deleted_names'] == ['headless-only.zip']
         assert all(len(list(Path(settings[key]).glob('*/keep.zip'))) == 3 for key in ('original_dir', 'new_dir'))
-    # Construct a real Task Scheduler definition in memory; never register or run it.
-    service = win32com.client.Dispatch('Schedule.Service')
-    service.Connect()
-    sid = win32security.ConvertSidToStringSid(win32security.ConvertStringSidToSid('S-1-5-21-1-2-3-1001'))
-    definition = task_definition(service, root / 'offline-never-executed.exe', sid, clock[0])
-    assert 'T22:00:00+07:00' in definition.Triggers.Item(1).StartBoundary
-    assert definition.Principal.LogonType == 3 and definition.Principal.RunLevel == 0
-    assert definition.Actions.Item(1).Arguments == '--scheduled-cleanup'
-    assert definition.Settings.StartWhenAvailable is False
+
+
+def check_background_schedule(root: Path) -> None:
+    from .schedule import BackgroundClock, TrackingHours
+    from .evidence import BANGKOK
+    def moment(value):
+        return datetime.fromisoformat(value).replace(tzinfo=BANGKOK).timestamp()
+    folder = root / 'schedule'
+    folder.mkdir()
+    history = History(folder)
+    hours = TrackingHours(history)
+    clock = BackgroundClock(moment('2026-10-17T21:59:59'))
+    assert hours.allowed(moment('2026-10-17T21:59:59'))
+    assert clock.tick(moment('2026-10-17T22:00:00')) == ['cleanup']
+    assert not hours.allowed(moment('2026-10-17T22:00:00'))
+    hours.resume_manually(moment('2026-10-17T23:00:00'))
+    assert TrackingHours(History(folder)).allowed(moment('2026-10-18T04:59:59'))
+    assert clock.tick(moment('2026-10-18T05:00:00')) == ['resume']
+    assert clock.tick(moment('2026-10-18T05:00:01')) == []
+    assert not hours.allowed(moment('2026-10-18T22:00:00'))
+    missed = BackgroundClock(moment('2026-10-17T21:59:59'))
+    assert missed.tick(moment('2026-10-18T07:00:00')) == ['resume']
+    late = BackgroundClock(moment('2026-10-17T22:05:00'))
+    assert late.tick(moment('2026-10-17T22:06:00')) == []
+
+
+def check_desktop_instance() -> None:
+    import uuid
+    from .desktop import DesktopInstance
+    identity = 'offline-selfcheck-' + uuid.uuid4().hex
+    primary = DesktopInstance(identity)
+    second = DesktopInstance(identity)
+    try:
+        assert not primary.existing and second.existing
+        assert not primary.requested()
+        second.notify()
+        assert primary.requested() and not primary.requested()
+    finally:
+        second.close()
+        primary.close()
+    reopened = DesktopInstance(identity)
+    try:
+        assert not reopened.existing
+    finally:
+        reopened.close()
+
+
+def check_native_tray() -> None:
+    import queue
+    import win32con
+    import win32gui
+    from .desktop import TrayIcon
+    from .gui import application_icon_path
+    actions = queue.Queue()
+    tray = TrayIcon(application_icon_path(), actions.put)
+    tray.start()
+    try:
+        assert tray.ready.wait(10) and not tray.error, tray.error
+        assert win32gui.IsWindow(tray.hwnd)
+        win32gui.PostMessage(tray.hwnd, win32con.WM_COMMAND, 100, 0)
+        assert actions.get(timeout=5) == 'tray_show'
+        win32gui.PostMessage(tray.hwnd, win32con.WM_COMMAND, 300, 0)
+        assert actions.get(timeout=5) == 'tray_exit'
+    finally:
+        tray.close()
+        assert tray.stopped.wait(10)
 
 
 def check_daily_queue(root: Path) -> None:
@@ -746,7 +800,8 @@ def run_self_check(output: Path) -> int:
               "download_policy": "daily_all", "ocr_enabled": False, "mail_delay_seconds": 270,
               "tracker_source": "new_dir", "sequential_accounts": True, "page_by_page": True, "portal_rows_per_page": 30,
               "daily_cleanup_time": '22:00', "daily_cleanup_preserves_all_folders": True,
-              "daily_cleanup_skips_deleted_names": True, "daily_cleanup_task_registered_live": False}
+              "daily_cleanup_skips_deleted_names": True, "daily_cleanup_task_registered_live": False,
+              "task_scheduler_required": False, "tracking_pause": '22:00', "tracking_resume": '05:00'}
     try:
         with tempfile.TemporaryDirectory(prefix="kde-v3-exe-check-") as temporary:
             root = Path(temporary)
@@ -831,9 +886,13 @@ def run_self_check(output: Path) -> int:
             check_daily_queue(root)
             result["checks"].append("270-second arrival window, persisted mail IDs, sequential accounts, busy retry beyond two attempts at 60 seconds, restored 270-second cooldown after success, no idle portal loop")
             check_daily_cleanup(root)
-            result['checks'].append('22:00 cleanup in temporary roots only; all Check/other folders preserved; active-download wait; persistent no-redownload names; headless idempotence; real Windows task definition in memory only, no task registration')
-            check_scheduler_missing_task()
-            result['checks'].append('Actual Windows background-thread missing-task lookup: nested COM SCODE 0x80070002 recognized for first setup; read-only, no task registered')
+            result['checks'].append('22:00 cleanup in temporary roots only; all folders preserved; active-download wait; persistent no-redownload names; background maintenance idempotence; no scheduled task')
+            check_background_schedule(root)
+            result['checks'].append('Bangkok pause 22:00 / resume 05:00; persisted manual overnight override; next-night reset; missed-night cleanup skipped')
+            check_desktop_instance()
+            result['checks'].append('Native isolated Windows instance mutex and reopen event; no duplicate instance; release permits restart')
+            check_native_tray()
+            result['checks'].append('Actual Windows tray icon and native show/exit messages; icon removed afterward; no startup or tasks installed')
             check_flat_storage(root)
             result["checks"].append("Two concurrent accounts store verified files directly in shared destination roots; legacy account subfolders ignored in all three modes")
             check_destination_preflight(root)

@@ -62,12 +62,16 @@ def main() -> int:
     candidate = validate_bundle(Path(metadata["exe"]).parent, metadata["sha256"])
     if candidate.name == "portable":
         raise ValueError("The replacement must be staged before promotion")
-    for name in ("packaged-check-3.1.json", "gui-3.1.json"):
+    for name in ("packaged-check-3.1.json", "gui-3.1.json", "background-3.7.0.json"):
         report = json.loads((ROOT / "docs/verification" / name).read_text(encoding="utf-8"))
         if report.get("exe_sha256") != metadata["sha256"] or report.get("live_portal_access") is not False:
             raise ValueError("Actual executable verification is missing or belongs to another bundle")
         if name.startswith("packaged") and (report.get("status") != "passed" or report.get("download_policy") != "daily_all" or report.get("ocr_enabled") is not False):
             raise ValueError("Packaged self-check failed")
+        if name.startswith('background') and (report.get('status') != 'passed' or not all(report.get(key) is True for key in
+                ('starts_hidden', 'background_duplicate_stays_hidden', 'manual_reopens_same_window',
+                 'x_hides_and_keeps_process', 'tray_exit_stops_process'))):
+            raise ValueError('Packaged background lifecycle verification failed')
         if name.startswith("gui") and (report.get("version") != metadata["version"] or not report.get("gui_started") or report.get("mail_queue_rows", 0) < 1
                                        or report.get("activity_rows", 0) < 1 or report.get("fixed_step_checklist") is not False
                                        or not report.get("history_search_passed") or not report.get("readable_event_details")
@@ -80,7 +84,10 @@ def main() -> int:
                                        or not report.get("deferred_status_visible") or not report.get("busy_status_visible")
                                        or not report.get("password_toggle_passed") or not report.get("stop_control_passed")
                                        or not report.get("includes_read_mail") or not report.get("today_only")
-                                       or not report.get("window_icon_applied") or not report.get("header_icon_applied")):
+                                       or not report.get("window_icon_applied") or not report.get("header_icon_applied")
+                                       or report.get('task_scheduler_required') is not False
+                                       or report.get('close_to_tray') is not True or report.get('manual_open_resumes') is not True
+                                       or report.get('tracking_pause') != '22:00' or report.get('tracking_resume') != '05:00'):
             raise ValueError("Packaged GUI verification failed")
     old = validate_bundle(ROOT / "portable", arguments.expected_old_sha)
     reject_running_bundle(old)

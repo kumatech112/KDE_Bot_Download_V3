@@ -1,4 +1,4 @@
-"""Simple English monitoring UI; all Outlook, OCR and portal work runs in workers."""
+"""Thai monitoring UI with tray maintenance and isolated download workers."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from .evidence import today
 from .settings import import_settings, load_settings, save_settings, validate_settings
 from .storage import History, WorkerLock, timestamp
 from .workflow import run_cycle
+from .schedule import BackgroundClock
 
 STEPS = {1: "เริ่มต้น", 2: "ตรวจเมล", 3: "เข้าสู่ระบบ", 4: "ตรวจรายการ", 5: "ตรวจไฟล์", 6: "ดาวน์โหลด", 7: "บันทึกไฟล์", 8: "ออกจากระบบ", 9: "ลบไฟล์ 22:00"}
 
@@ -53,10 +54,19 @@ def apply_window_icon(root: tk.Tk) -> bool:
 
 
 class Application(ttk.Frame):
-    def __init__(self, root: tk.Tk, smoke: bool = False):
+    def __init__(self, root: tk.Tk, smoke: bool = False, background=False, instance=None):
         super().__init__(root, padding=16)
         self.root = root
         self.smoke = smoke
+        self.instance = instance
+        self.tray = None
+        self.closing = False
+        self.background_clock = BackgroundClock(time.time())
+        self.maintenance_stop = threading.Event()
+        self.maintenance_worker = None
+        self.resume_pending = False
+        self.resume_manual = not background
+        self.schedule_paused = False
         self.settings, self.notices = load_settings()
         self.events: queue.Queue = queue.Queue()
         self.requests: queue.Queue = queue.Queue()
@@ -73,7 +83,7 @@ class Application(ttk.Frame):
         self.summary = tk.StringVar(value='ยังไม่มีรอบดาวน์โหลด')
         self.mail_health = {}
         self.mail_status = tk.StringVar(value='การตรวจเมล: ยังไม่ได้เริ่มทำงาน')
-        self.cleanup_status = tk.StringVar(value='ลบเฉพาะไฟล์ชั้นนอกทั้ง .243 และ .97 เก็บทุกโฟลเดอร์และไฟล์ข้างในไว้')
+        self.cleanup_status = tk.StringVar(value='ปิดหน้าต่าง = ทำงานเบื้องหลัง · ลบ 22:00 (เก็บทุกโฟลเดอร์) · ติดตามต่อ 05:00 หรือเมื่อเปิด KDE')
         self.current_step = tk.StringVar(value="เมลใหม่ → รอ 4 นาที 30 วินาที → ทำทีละบัญชี หน้าละ 30 รายการ → ตรวจไฟล์ซ้ำจาก .97")
         self.filter = tk.StringVar()
         self.follow_history = tk.BooleanVar(value=True)
@@ -101,9 +111,10 @@ class Application(ttk.Frame):
             self.status.set('กรุณาตั้งค่าก่อนเริ่ม')
             self.tabs.select(self.settings_page)
         if not smoke:
+            self.start_tray(background)
             root.after(400, self.auto_start)
             root.after(600, self.load_history)
-            root.after(1000, self.configure_cleanup_task)
+            root.after(1000, self.configure_background_startup)
 
     def build_controls(self) -> None:
         from PIL import Image, ImageTk
@@ -121,7 +132,7 @@ class Application(ttk.Frame):
         ttk.Label(header, text=VERSION).grid(row=0, column=1, sticky="e")
         toolbar = ttk.Frame(self)
         toolbar.grid(row=1, column=0, sticky="ew", pady=(12, 8))
-        self.start_button = ttk.Button(toolbar, text='เริ่มทำงาน', command=lambda: self.start("watch"))
+        self.start_button = ttk.Button(toolbar, text='เริ่มทำงาน', command=self.resume_tracking)
         self.start_button.pack(side="left")
         self.busy_buttons.append(self.start_button)
         self.stop_button = ttk.Button(toolbar, text='หยุด', command=self.stop, state="disabled")
@@ -136,7 +147,9 @@ class Application(ttk.Frame):
         menu.add_command(label='นำเข้าการตั้งค่า', command=self.import_configuration)
         menu.add_command(label='นำเข้าประวัติเดิม', command=self.import_history)
         menu.add_command(label='เปิดโฟลเดอร์ประวัติ', command=self.open_logs)
-        menu.add_command(label='ตั้งค่างานลบเวลา 22:00', command=self.configure_cleanup_task)
+        menu.add_command(label='ตั้งค่าการเริ่มพร้อม Windows', command=self.configure_background_startup)
+        menu.add_separator()
+        menu.add_command(label='ออกจากโปรแกรมทั้งหมด', command=self.exit_fully)
         tools.configure(menu=menu)
         tools.pack(side="right")
         bar = ttk.Frame(self)
@@ -250,6 +263,10 @@ class Application(ttk.Frame):
         advanced = ttk.Button(buttons, text='ตัวเลือกเพิ่มเติม', command=self.advanced_settings)
         advanced.pack(side="left", padx=10)
         self.busy_buttons.append(advanced)
+        self.variables['start_with_windows'] = tk.BooleanVar(value=True)
+        startup = ttk.Checkbutton(buttons, text='เริ่มพร้อม Windows', variable=self.variables['start_with_windows'])
+        startup.pack(side='left', padx=10)
+        self.inputs.append(startup)
         ttk.Label(page, textvariable=self.cleanup_status, wraplength=1050).grid(row=9, column=0, columnspan=3, sticky="w")
 
     def advanced_settings(self) -> None:
@@ -328,27 +345,105 @@ class Application(ttk.Frame):
             self.settings = self.collect_settings()
             validate_settings(self.settings)
             save_settings(self.settings)
-            self.configure_cleanup_task()
+            self.configure_background_startup()
             self.notice_label.configure(text='บันทึกการตั้งค่าสำหรับผู้ใช้ Windows นี้แล้ว')
             self.start("watch")
         except Exception as error:
             messagebox.showerror('บันทึกการตั้งค่าไม่ได้', thai_text(str(error)), parent=self.root)
 
-    def configure_cleanup_task(self) -> None:
+    def configure_background_startup(self) -> None:
+        """Configure user sign-in startup and retire only our legacy task."""
         if self.smoke:
             return
+        settings = copy.deepcopy(self.settings)
         def work():
             from .cleanup_task import configure_task
             from .settings import settings_home
+            from .startup import configure_startup
             try:
                 if not (settings_home() / 'settings.json').is_file():
-                    message = 'บันทึกการตั้งค่าบนเครื่อง .97 ก่อนเปิดใช้งานลบไฟล์อัตโนมัติ'
+                    message = 'บันทึกการตั้งค่าก่อน · ปิดหน้าต่างเพื่อทำงานเบื้องหลัง · พัก 22:00 ถึง 05:00'
                 else:
-                    message = configure_task(self.settings['daily_cleanup_enabled'])['message']
+                    message = configure_startup(settings['start_with_windows'])
+                    try:
+                        configure_task(False)
+                    except Exception:
+                        message += ' · งานตั้งเวลาเดิมไม่ถูกลบ แต่คำสั่งเดิมจะไม่ลบไฟล์อีก'
+                    message += ' · ลบ 22:00 / ติดตามเมลต่อ 05:00 · ต้องเปิดเครื่องและคงโปรแกรมไว้ในถาดระบบ'
             except Exception as error:
-                message = f'ตั้งงานลบ 22:00 ไม่สำเร็จ: {thai_text(error)}'
+                message = f'ตั้งค่าเริ่มพร้อม Windows ไม่สำเร็จ: {thai_text(error)} · ตัวจับเวลาในโปรแกรมยังทำงาน'
             self.events.put(('cleanup_task', message))
-        threading.Thread(target=work, name='KDE-task-setup', daemon=True).start()
+        threading.Thread(target=work, name='KDE-startup-setup', daemon=True).start()
+
+    def start_tray(self, background=False):
+        from .desktop import TrayIcon
+        self.tray = TrayIcon(application_icon_path(), lambda action: self.events.put((action, None)))
+        self.tray.start()
+        if background:
+            self.root.withdraw()
+        self.root.after(100, lambda: self.check_tray_ready(background))
+
+    def check_tray_ready(self, background):
+        if self.closing:
+            return
+        if not self.tray.ready.is_set():
+            self.root.after(100, lambda: self.check_tray_ready(background))
+            return
+        if self.tray.error or self.tray.stopped.is_set():
+            self.root.deiconify()
+            self.status.set('สร้างไอคอนถาดระบบไม่ได้ กรุณาเปิดหน้าต่างนี้ไว้: ' + str(self.tray.error or 'Tray stopped'))
+
+    def show_window(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.hide_passwords()
+        self.resume_tracking()
+
+    def resume_tracking(self, manual=True):
+        if self.closing:
+            return
+        if self.maintenance_worker and self.maintenance_worker.is_alive():
+            self.resume_pending = True
+            self.resume_manual = self.resume_manual or manual
+            self.status.set('รอลบไฟล์เสร็จ แล้วเริ่มติดตามเมล')
+            return
+        if self.worker and self.worker.is_alive():
+            if self.stop_event.is_set():
+                self.resume_pending = True
+                self.resume_manual = self.resume_manual or manual
+            elif manual:
+                self.requests.put({'kind': 'resume_tracking'})
+            return
+        self.resume_manual = manual
+        self.resume_pending = False
+        self.auto_start(force=True)
+
+    def start_maintenance(self):
+        if self.closing or not self.settings.get('daily_cleanup_enabled', True):
+            return
+        if self.maintenance_worker and self.maintenance_worker.is_alive():
+            return
+        self.maintenance_stop.clear()
+        def work():
+            from .cleanup import run_scheduled_cleanup
+            from .cleanup_task import on_cleanup_machine
+            from .settings import settings_home
+            try:
+                if not on_cleanup_machine():
+                    raise RuntimeError('ลบไฟล์อัตโนมัติเฉพาะเครื่อง .97')
+                if not (settings_home() / 'settings.json').is_file():
+                    raise RuntimeError('ยังไม่ได้บันทึกการตั้งค่า จึงไม่ลบไฟล์')
+                saved, notices = load_settings()
+                if any(notice.startswith('Cannot read settings:') for notice in notices):
+                    raise RuntimeError('อ่านการตั้งค่าไม่ได้ จึงไม่ลบไฟล์')
+                validate_settings(saved, require_credentials=False)
+                code = run_scheduled_cleanup(saved, self.maintenance_stop)
+                message = 'ตรวจงานลบ 22:00 แล้ว · ดูผลในประวัติ · พักถึง 05:00' if code == 0 else 'งานลบ 22:00 ไม่ครบ กรุณาดูประวัติ'
+                self.events.put(('maintenance_result', message))
+            except Exception as error:
+                self.events.put(('maintenance_result', f'ลบไฟล์ 22:00 ไม่สำเร็จ: {thai_text(error)}'))
+        self.maintenance_worker = threading.Thread(target=work, name='KDE-maintenance', daemon=False)
+        self.maintenance_worker.start()
 
     def auto_start(self, force=False) -> None:
         if self.smoke and not force:
@@ -410,6 +505,7 @@ class Application(ttk.Frame):
         if self.worker and self.worker.is_alive():
             self.requests.put({"kind": "retry"})
         else:
+            self.resume_manual = True
             self.start("requeue")
 
     def repair_saves(self) -> None:
@@ -419,6 +515,14 @@ class Application(ttk.Frame):
             self.start("retry")
 
     def start(self, mode: str) -> None:
+        if self.closing:
+            return
+        if self.maintenance_worker and self.maintenance_worker.is_alive():
+            if mode in {'watch', 'requeue'}:
+                self.resume_pending = True
+                self.resume_manual = True
+            self.status.set('รอให้งานลบไฟล์เสร็จก่อนเริ่มงานใหม่')
+            return
         if self.worker and self.worker.is_alive():
             return
         try:
@@ -431,6 +535,14 @@ class Application(ttk.Frame):
             messagebox.showerror('เริ่มทำงานไม่ได้', thai_text(str(error)), parent=self.root)
             return
         self.stop_event.clear()
+        while not self.requests.empty():
+            try:
+                self.requests.get_nowait()
+            except queue.Empty:
+                break
+        if mode in {'watch', 'requeue'} and self.resume_manual:
+            self.requests.put({'kind': 'resume_tracking'})
+        self.resume_manual = False
         self.mail_health = {}
         self.mail_status.set('การตรวจเมล: กำลังเริ่มตรวจทุกโฟลเดอร์ขาเข้าของกล่องที่ตั้งค่าไว้')
         self.set_busy(True)
@@ -484,6 +596,14 @@ class Application(ttk.Frame):
                 self.status.set("ผิดพลาด: " + thai_text(value))
             elif kind == "notice":
                 self.status.set(thai_text(value))
+            elif kind == 'tray_show':
+                self.show_window()
+            elif kind == 'tray_exit':
+                self.exit_fully()
+            elif kind == 'maintenance_result':
+                self.cleanup_status.set(value)
+                self.status.set(value)
+                self.load_history()
             elif kind == 'cleanup_task':
                 self.cleanup_status.set(value)
                 if 'ไม่สำเร็จ' in value:
@@ -496,6 +616,7 @@ class Application(ttk.Frame):
                 changed = True
             elif kind == "idle":
                 self.set_busy(False)
+                self.schedule_paused = False
                 if self.stop_event.is_set():
                     self.status.set('หยุดทำงานแล้ว')
         if changed:
@@ -503,6 +624,9 @@ class Application(ttk.Frame):
         self.poll_id = self.root.after(100, self.drain_events)
 
     def accept_event(self, event: dict[str, Any]) -> None:
+        if event.get('kind') == 'schedule_status':
+            self.schedule_paused = event['paused']
+            return
         if event.get("kind") == "mail_health":
             self.mail_health = event
             return
@@ -555,6 +679,10 @@ class Application(ttk.Frame):
                 else:
                     suffix = 'กำลังดาวน์โหลด' if any(job['status'] == 'running' for job in ordered) else 'รอเมลใหม่'
                 self.mail_status.set(prefix + ' · ' + suffix)
+        if self.schedule_paused:
+            self.mail_status.set('พักติดตามเมลถึง 05:00 · เปิด KDE เพื่อเริ่มก่อนเวลาได้ · รอให้งานปัจจุบันจบก่อนลบไฟล์')
+        elif self.stop_event.is_set():
+            self.mail_status.set('หยุดติดตามเมลแล้ว · ตัวจับเวลาลบ 22:00 และเริ่มใหม่ 05:00 ยังทำงานเมื่อโปรแกรมอยู่เบื้องหลัง')
 
     def render_activity(self) -> None:
         search = self.filter.get().casefold()
@@ -618,26 +746,53 @@ class Application(ttk.Frame):
         self.status.set(f"{error_type.__name__}: {error}")
 
     def tick(self) -> None:
+        if self.closing:
+            return
+        if not self.smoke:
+            if self.instance and self.instance.requested():
+                self.show_window()
+            for action in self.background_clock.tick(time.time()):
+                if action == 'cleanup':
+                    self.start_maintenance()
+                elif action == 'resume':
+                    self.resume_tracking(manual=False)
+            if self.resume_pending and not (self.worker and self.worker.is_alive()) and not (self.maintenance_worker and self.maintenance_worker.is_alive()):
+                self.resume_tracking(manual=self.resume_manual)
         self.render_jobs()
         self.clock_id = self.root.after(1000, self.tick)
 
     def close(self) -> None:
-        if self.worker and self.worker.is_alive():
-            self.stop()
-            self.root.after(250, self.wait_to_close)
+        if self.smoke:
+            self.exit_fully()
+        elif self.tray and self.tray.ready.is_set() and not self.tray.error and not self.tray.stopped.is_set():
+            self.hide_passwords()
+            self.root.withdraw()
+        else:
+            self.status.set('ถาดระบบยังไม่พร้อม กรุณาเปิดหน้าต่างไว้ หรือเลือกเครื่องมือ → ออกจากโปรแกรมทั้งหมด')
+
+    def exit_fully(self):
+        if self.closing:
             return
-        self.root.after_cancel(self.poll_id)
-        self.root.after_cancel(self.clock_id)
-        self.root.destroy()
+        self.closing = True
+        self.stop()
+        self.maintenance_stop.set()
+        self.wait_to_close()
 
     def wait_to_close(self) -> None:
-        if self.worker and self.worker.is_alive():
+        if (self.worker and self.worker.is_alive()) or (self.maintenance_worker and self.maintenance_worker.is_alive()):
             self.root.after(250, self.wait_to_close)
         else:
-            self.close()
+            self.root.after_cancel(self.poll_id)
+            self.root.after_cancel(self.clock_id)
+            if self.tray:
+                self.tray.close()
+                if not self.tray.stopped.is_set():
+                    self.root.after(100, self.wait_to_close)
+                    return
+            self.root.destroy()
 
 
-def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = None) -> int:
+def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = None, background=False, instance=None) -> int:
     root = tk.Tk()
     window_icon_applied = apply_window_icon(root)
     root.title("KDE Download")
@@ -647,7 +802,7 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
     style = ttk.Style(root)
     style.configure("Treeview", rowheight=32, font=("Tahoma", 11))
     style.configure("Treeview.Heading", font=("Tahoma", 11, "bold"))
-    app = Application(root, smoke=smoke_screenshot is not None)
+    app = Application(root, smoke=smoke_screenshot is not None, background=background, instance=instance)
     if smoke_screenshot:
         root.withdraw()
         root.update()
@@ -711,6 +866,19 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
             app.variables['daily_cleanup_enabled'].set(False)
             cleanup_toggle_passed &= app.collect_settings()['daily_cleanup_enabled'] is False
             app.variables['daily_cleanup_enabled'].set(True)
+            from types import SimpleNamespace
+            ready = threading.Event()
+            ready.set()
+            app.tray = SimpleNamespace(ready=ready, error=None, stopped=threading.Event())
+            app.smoke = False
+            app.close()
+            root.update_idletasks()
+            close_to_tray_passed = root.state() == 'withdrawn' and not app.stop_event.is_set() and not app.maintenance_stop.is_set()
+            with patch.object(app, 'resume_tracking') as resume:
+                app.show_window()
+                manual_open_passed = resume.call_count == 1
+            app.smoke = True
+            app.tray = None
             app.status.set("ติดตามเมล data · ไฟล์วันที่ปัจจุบัน · ทำทีละบัญชี")
             smoke_screenshot.parent.mkdir(parents=True, exist_ok=True)
             def screenshot(page, path):
@@ -740,6 +908,8 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                       "daily_cleanup_toggle_passed": cleanup_toggle_passed,
                       "daily_cleanup_preserves_all_folders": True, "daily_cleanup_requires_monitor": False,
                       "daily_cleanup_task_registered_live": False, "daily_cleanup_skips_deleted_names": True,
+                      "task_scheduler_required": False, "close_to_tray": close_to_tray_passed, "tracking_pause": '22:00',
+                      "tracking_resume": '05:00', "manual_open_resumes": manual_open_passed, "background_app_required": True,
                       "includes_read_mail": not app.settings["mail_watch"]["unread_only"], "machine": socket.gethostname(), "live_portal_access": False}
             if smoke_report:
                 smoke_report.write_text(json.dumps(report, indent=2), encoding="utf-8")

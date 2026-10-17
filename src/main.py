@@ -21,33 +21,8 @@ def filesystem_path(value: str) -> Path:
 
 
 def scheduled_cleanup_entry() -> int:
-    """Return task status without opening a GUI or a Python error dialog."""
-    from datetime import datetime
-    from kde_bot.cleanup_task import on_cleanup_machine
-    from kde_bot.cleanup import run_scheduled_cleanup
-    from kde_bot.evidence import BANGKOK
-    from kde_bot.settings import atomic_json, load_settings, settings_home, validate_settings
-
-    try:
-        if not on_cleanup_machine():
-            raise RuntimeError('งานลบไฟล์อนุญาตให้ทำงานเฉพาะเครื่อง .97')
-        if not (settings_home() / 'settings.json').is_file():
-            raise RuntimeError('ไม่พบการตั้งค่าผู้ใช้ จึงไม่ลบไฟล์')
-        settings, notices = load_settings()
-        if any(notice.startswith('Cannot read settings:') for notice in notices):
-            raise RuntimeError('อ่านการตั้งค่าไม่ได้ จึงไม่ลบไฟล์')
-        validate_settings(settings, require_credentials=False)
-        code = run_scheduled_cleanup(settings)
-        reason = 'จบการทำงานตามนโยบาย 22:00' if code == 0 else 'ลบไฟล์ไม่ครบ กรุณาดูประวัติการทำงาน'
-    except Exception as error:
-        code = 1
-        reason = f'{type(error).__name__}: {error}'
-    try:
-        atomic_json(settings_home() / 'cleanup_task_result.json',
-                    {'time': datetime.now(BANGKOK).isoformat(), 'exit_code': code, 'reason': reason})
-    except OSError:
-        pass  # Preserve the nonzero task exit status even when its local report is unavailable.
-    return code
+    """Retired task actions are harmless even if Windows refuses their removal."""
+    return 0
 
 
 def main() -> int:
@@ -56,6 +31,7 @@ def main() -> int:
     parser.add_argument("--smoke-report", type=filesystem_path)
     parser.add_argument("--self-check", type=filesystem_path)
     parser.add_argument('--scheduled-cleanup', action='store_true')
+    parser.add_argument('--background', action='store_true')
     arguments = parser.parse_args()
     if arguments.scheduled_cleanup:
         return scheduled_cleanup_entry()
@@ -68,8 +44,18 @@ def main() -> int:
             os.environ["KDE_V3_HOME"] = temporary
             from kde_bot.gui import launch
             return launch(arguments.smoke_screenshot, arguments.smoke_report)
+    from kde_bot.desktop import DesktopInstance
+    from kde_bot.settings import settings_home
     from kde_bot.gui import launch
-    return launch()
+    instance = DesktopInstance(str(settings_home().resolve()))
+    try:
+        if instance.existing:
+            if not arguments.background:
+                instance.notify()
+            return 0
+        return launch(background=arguments.background, instance=instance)
+    finally:
+        instance.close()
 
 
 if __name__ == "__main__":

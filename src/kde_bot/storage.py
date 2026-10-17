@@ -227,6 +227,17 @@ class History:
                         or not all(isinstance(job.get(field), str) for field in ("id", "account", "label", "work_date"))):
                     raise ValueError("Invalid daily account queue; original data preserved.")
 
+        schedule = self.data.get('tracking_schedule')
+        if schedule is not None:
+            try:
+                if not isinstance(schedule, dict):
+                    raise ValueError('Invalid schedule object')
+                value = schedule.get('manual_night')
+                if value is not None and (not isinstance(value, str) or datetime.strptime(value, '%Y-%m-%d').date().isoformat() != value):
+                    raise ValueError('Invalid schedule date')
+            except (ValueError, TypeError) as error:
+                raise ValueError('Invalid tracking schedule; original data preserved.') from error
+
         cleanup = self.data.get('daily_cleanup')
         if cleanup is not None:
             if (not isinstance(cleanup, dict) or not isinstance(cleanup.get('day'), str)

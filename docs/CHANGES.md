@@ -1,3 +1,11 @@
+# KDE Bot Download V3 — 3.7.0
+
+- Replace scheduled cleanup with a tray-based maintenance clock. X hides KDE; explicit full exit stops it.
+- At 22:00 pause mail scans/new account work, finish the current account and clean only direct files in both approved roots. Preserve all folders and contents, deletion journals and shared locks.
+- Resume tracking automatically at 05:00 or early on manual reopening; retain today's-only downloads and 270-second mail-trigger delay.
+- Add per-user Windows sign-in startup on .97 and single-instance reopen signaling. Retire own legacy task best-effort; legacy task CLI no longer deletes anything.
+- Preserve Thai GUI, simple folder layout, credentials/settings, account sequencing and duplicate detection. Timed actions require KDE running in the tray on an awake signed-in computer.
+
 # KDE Bot Download V3 — 3.6.1
 
 - Fix first-run task lookup: recognize ERROR_FILE_NOT_FOUND inside a DISP_E_EXCEPTION/excepinfo SCODE as well as a direct HRESULT. Continue creating the task only for the expected missing-task response from GetTask.

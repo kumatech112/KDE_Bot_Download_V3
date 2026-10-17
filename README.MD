@@ -1,4 +1,4 @@
-# KDE Download — 3.6.1
+# KDE Download — 3.7.0
 
 Thai Windows GUI with การทำงาน (Monitor), ประวัติการทำงาน (History) and ตั้งค่า (Settings). Open **portable\KDE Bot Download V3.exe**; keep **_internal** beside it. The pinned browser is included. Python and OCR are not required on the deployment computer.
 
@@ -20,13 +20,12 @@ Thai Windows GUI with การทำงาน (Monitor), ประวัติ�
 
 - Delete only regular files directly in **both** `\\10.0.0.243\pgp-data$` and `\\10.0.0.97\Z Bot KDE`, regardless of the download storage mode. Never recurse, follow links or remove a folder. All folders and their contents survive, including the observed `03 Check` and `Checked`.
 - Persist deleted/pending-deletion filenames in the shared state. Today's intentionally deleted files are not downloaded or repaired back that day, including after restart; different filenames/extensions and the next day's files still follow the normal download policy.
-- Cleanup waits for the current account download/logout to finish. It runs once per Bangkok day, logs deletions/failures in the existing monthly CSV and leaves locked/denied files in place. Stop can interrupt the in-app pass; restarting never repeats a partially completed deletion pass against later arrivals.
-- Opening the stable portable EXE on **.97** installs or updates a Windows task for the signed-in user. The task runs at **22:00 even with KDE closed**, using that user's existing share access and without storing a password. If KDE is running, a small request in the Log folder coordinates the same cleanup under the existing shared worker lock.
-- .97 must be on and that Windows user signed in; the screen may be locked. There is no missed-night catch-up after shutdown/sign-out. Local task registration status appears in Settings. Uncheck the 22:00 option and save to disable both the timer and that user's task.
+- Cleanup waits for the current account download/logout to finish. It runs once per Bangkok day, logs deletions/failures in the existing monthly CSV and leaves locked/denied files in place. Restarting never repeats a partially completed deletion pass against later arrivals.
+- Closing the window hides KDE in the Windows tray. Its in-process maintenance timer continues even when email tracking is stopped. At 22:00 no new account session or email scan starts; the active account finishes before cleanup. Tracking resumes automatically at 05:00, or early when KDE is opened manually. A manual opening resumes the existing instance, without forcing a portal round.
+- The **Exit program completely** tray/Tools command stops all timers. The computer must remain on, awake and signed in for timed actions. There is no missed-night cleanup after shutdown/sign-out; opening after 22:00 does not delete the next day's files. At 05:00 only current-day email/file processing resumes.
+- On first normal launch from stable portable on .97, **Start with Windows** configures only this user's startup registry value, launching KDE hidden at sign-in. It needs no administrator password or Task Scheduler. Uncheck/save to disable startup; uncheck the independent 22:00 option/save to disable deletion.
 
-Remote Task Scheduler access from the builder was denied. The release is prepared to register locally when opened on .97; live registration and real business-file deletion are not claimed by offline verification.
-
-Version 3.6.1 fixes first-time setup when Windows wraps the expected task-not-found code `0x80070002` inside a COM dispatch exception. Lookup then continues to registration; other errors identify the failed setup stage and Windows code.
+The old own-user KDE scheduled task is removed on a best-effort basis, checking its owner and exact action. A leftover task's legacy `--scheduled-cleanup` action now exits harmlessly. Task Scheduler availability does not control the new timer. Target-machine startup activation, live Outlook/KDE and real business-file deletion remain deployment checks; offline verification uses isolated data.
 
 The reported RuntimeError was found in the shared log: the old complete-catalogue page limit stopped downloads before they began. The new forward page processor starts saving immediately, derives traversal room from pagination totals with a safe fallback, detects unchanged/repeated pages and preserves already-saved files on later errors. A regression reproduces 77 rows with the old max_pages=1 setting.
 
@@ -40,7 +39,7 @@ The reported RuntimeError was found in the shared log: the old complete-catalogu
 
 Select .97 only, or .97 plus .243. The older original-only choice migrates to both so .97 remains authoritative. No business-folder tracker/probe/log/temp file or account folder is created. Only final downloaded files are saved there. Existing zero-byte files or conflicting content remain visible failures, never automatic overwrites.
 
-Local settings, encrypted passwords, validated pending sources and one overwritten scheduled-task result remain under `%LOCALAPPDATA%\KDE Bot Download V3`. The Log folder holds one schema-3 state, one CSV per month, the worker lock and a transient cleanup request only while coordination is pending. One worker may own that shared Log at a time.
+Local settings, encrypted passwords and validated pending sources remain under `%LOCALAPPDATA%\KDE Bot Download V3`. Existing old task-result files are preserved but no longer written. The Log folder holds one schema-3 state, one CSV per month, the worker lock and a transient cleanup request only while coordination is pending. One worker may own that shared Log at a time. Manual overnight resume is stored additively in the same state and expires at the next 22:00 boundary.
 
 See the [Thai Quick Start](docs/QUICK_START.md), [function map](docs/ARCHITECTURE.md), [changes](docs/CHANGES.md) and [verification](docs/VERIFICATION.md).
 
