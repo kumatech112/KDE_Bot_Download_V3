@@ -40,10 +40,11 @@ def portal_day(row: dict) -> str | None:
 
 
 def daily_folders(settings):
-    """.97 is the required downloaded-file tracker; .243 is an optional copy."""
-    folders = [Path(settings["new_dir"])]
+    """Publish to .243 before copying to .97; .97 remains the duplicate reference."""
+    folders = []
     if settings["storage_mode"] != "new":
         folders.append(Path(settings["original_dir"]))
+    folders.append(Path(settings["new_dir"]))
     return list(dict.fromkeys(folders))
 
 
@@ -175,8 +176,12 @@ class DailyDelivery(Delivery):
         return exact_record_key(account, filename)
 
     def existing_source(self, available):
-        # .243 presence does not establish that today's file was downloaded.
+        # An exact .243 file can supply the .97 copy without another portal download.
         return None if self.download_missing_tracker else super().existing_source(available)
+
+    def source_after_publish(self, source, published):
+        """The second destination must be copied from the verified first destination."""
+        return published
 
     def existing(self, folder, filename):
         target = folder / filename
@@ -209,7 +214,7 @@ class DailyDelivery(Delivery):
 class DailyDownloader(StructuredDownloader):
     def __init__(self, settings, reporter, delivery, configuration, stop_event, work_day=None):
         reporter.language = "th"
-        exact_delivery = DailyDelivery(delivery.history, reporter, download_missing_tracker=True)
+        exact_delivery = DailyDelivery(delivery.history, reporter)
         super().__init__(settings, reporter, exact_delivery, configuration, stop_event, read_evidence=False)
         self.work_day = work_day or today()
         self.jobs = [{"id": "daily-sweep", "lookup": {}}]  # Use the verified complete-catalogue traversal.

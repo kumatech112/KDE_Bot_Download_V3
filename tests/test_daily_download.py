@@ -376,21 +376,21 @@ def test_explicit_repair_reuses_exact_daily_cached_file_without_browser(setup, t
     assert not source.exists()
 
 
-def test_243_only_presence_does_not_skip_or_reuse_old_content(setup, tmp_path):
+def test_243_only_presence_copies_without_another_kde_download(setup, tmp_path):
     settings, history, reporter, events = setup
     name = "daily-report.zip"
     original = Path(settings["original_dir"]) / name
-    original.write_bytes(b"old content in 243")
+    original.write_bytes(b"existing source in 243")
     source = tmp_path / "local" / "cache" / "fresh.download"
     source.parent.mkdir(parents=True)
     source.write_bytes(b"today content from KDE")
     engine = daily.DailyDownloader(make_engine_settings(settings, history.folder / "engine.json"), reporter,
                                    Delivery(history, reporter), settings, threading.Event(), DAY)
-    with patch.object(engine, "download_to_cache", return_value=source) as download:
-        assert engine.handle_file(None, 0, {"filename": name, "file_time": "16/10/2026"}, engine.settings.accounts[0], 1000) == "copy_pending"
-    download.assert_called_once()
-    assert (Path(settings["new_dir"]) / name).read_bytes() == b"today content from KDE"
-    assert original.read_bytes() == b"old content in 243"
+    with patch.object(engine, "download_to_cache", side_effect=AssertionError(".243 can supply the copy")) as download:
+        assert engine.handle_file(None, 0, {"filename": name, "file_time": "16/10/2026"}, engine.settings.accounts[0], 1000) == "complete"
+    download.assert_not_called()
+    assert (Path(settings["new_dir"]) / name).read_bytes() == b"existing source in 243"
+    assert original.read_bytes() == b"existing source in 243"
     with patch.object(engine, "download_to_cache", side_effect=AssertionError(".97 already has it")):
         assert engine.handle_file(None, 0, {"filename": name, "file_time": "16/10/2026"}, engine.settings.accounts[0], 1000) == "skipped"
 

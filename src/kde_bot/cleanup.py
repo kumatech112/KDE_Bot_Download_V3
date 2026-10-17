@@ -16,7 +16,7 @@ from .evidence import BANGKOK
 from .schedule import scheduled_time
 
 
-APPROVED_ROOTS = (r"\\10.0.0.243\pgp-data$", r"\\10.0.0.97\Z Bot KDE")
+APPROVED_ROOTS = (r"\\10.0.0.243\pgp-data$", r"\\10.0.0.97\Z KDE Bot")
 REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 

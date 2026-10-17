@@ -405,6 +405,10 @@ class Delivery:
     def existing_source(self, available: list[Path]) -> Path | None:
         return available[0] if available else None
 
+    def source_after_publish(self, source: Path, published: Path) -> Path:
+        """Keep generic delivery behavior; specialized flows may chain publications."""
+        return source
+
     def index(self, folder: Path, refresh: bool = False) -> dict[str, list[Path]]:
         with self.index_lock:
             return self._index(folder, refresh)
@@ -486,6 +490,7 @@ class Delivery:
                 record["downloaded_at"] = timestamp()
             self.history.set_file(key, record)
             copied = False
+            publication_source = source
             for folder, existing in locations:
                 stage = 7
                 target = existing or folder / filename
@@ -494,9 +499,10 @@ class Delivery:
                 else:
                     self.reporter.emit(7, "running", "Saving and verifying the final destination file", account, filename, str(target))
                     was_missing = existing is None
-                    verified_copy(source, target, digest)
+                    verified_copy(publication_source, target, digest)
                     record["destinations"][str(folder)] = str(target)
                     copied = copied or was_missing
+                publication_source = self.source_after_publish(publication_source, target)
                 self.history.set_file(key, record)
                 identity = canonical_file_identity(filename)
                 with self.index_lock:

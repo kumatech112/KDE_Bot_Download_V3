@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import ntpath
 import os
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,8 @@ def default_settings() -> dict[str, Any]:
         "version": 3,
         "storage_mode": "both",
         "original_dir": r"\\10.0.0.243\pgp-data$",
-        "new_dir": r"\\10.0.0.97\Z Bot KDE",
-        "log_dir": r"\\10.0.0.97\Z Log\Log Bot KDE",
+        "new_dir": r"\\10.0.0.97\Z KDE Bot",
+        "log_dir": r"\\10.0.0.97\Z Log Bot\KDE Log Bot",
         "portal_url": "https://www.krungsrifileserver.com/kde-portal",
         "host_url": "https://www.krungsrifileserver.com",
         "auth_api_url": "https://www.krungsrifileserver.com/redirect/kde-auth-api/authn",
@@ -112,12 +113,29 @@ def encrypt_credentials(value: Any, key: str = "") -> Any:
     return value
 
 
+def migrate_folder_paths(settings: dict[str, Any]) -> None:
+    """Replace only retired KDE aliases; retain custom folders and credentials."""
+    aliases = {
+        "new_dir": (r"\\10.0.0.97\Z Bot KDE",),
+        "log_dir": (r"\\10.0.0.97\Z Log\Log Bot KDE",
+                    r"\\10.0.0.97\Z Log Bot\Log Bot KDE",
+                    r"\\10.0.0.97\Z Bot KDE"),
+    }
+    defaults = default_settings()
+    for key, previous in aliases.items():
+        value = settings[key]
+        if isinstance(value, str) and ntpath.normcase(ntpath.normpath(value)).rstrip("\\") in {
+                ntpath.normcase(ntpath.normpath(path)).rstrip("\\") for path in previous}:
+            settings[key] = defaults[key]
+
+
 def normalize_settings(raw: dict[str, Any]) -> dict[str, Any]:
     from .schedule import clock_parts
     result = default_settings()
     for key in result:
         if key in raw and key not in {"accounts", "mail_watch"}:
             result[key] = raw[key]
+    migrate_folder_paths(result)
     result["mail_watch"].update({
         key: value for key, value in raw.get("mail_watch", {}).items()
         if key in result["mail_watch"]

@@ -1,41 +1,34 @@
-# Verification — 2026-10-17 — 3.8.0
+# Verification — 2026-10-17 — 3.8.1
 
-## Grouped settings verification
+## Scope and data flow
 
-- All **298 tests and 4 subtests passed**, including 18 new preference regressions. Custom values survive encrypted save/load without resetting to defaults.
-- A 90-second mail delay and 20-second login retry control queue creation, busy recovery and post-success cooldown. Restart preserves an existing pending deadline.
-- Custom 21:15 cleanup and 06:20 resume boundaries work at minute precision. Both in-monitor cleanup and the independent background worker delete only temporary direct files, preserving Check and nested contents. Same-day pause windows and the pause-off switch are covered.
-- Automatic tracking can be disabled while explicit Start remains available. Explicit browser selection overrides the bundled executable.
-- GUI checks exercise four Thai settings sections, actual save-only behavior and edited 90/20-second plus 21:15/06:20 values saved and reloaded by the EXE. Every settings section has its own screenshot. General main-window instructions and the separate Advanced dialog were removed.
+Follow the user-created `\\10.0.0.97\Z KDE Bot` copy share and `\\10.0.0.97\Z Log Bot\KDE Log Bot` history share. Save/verify the final download in .243, then read the verified .243 file to copy it to .97. Exact .97 filenames still suppress duplicates. Exact .243-only files can now supply the copy without a portal redownload; recorded SHA-256 conflicts remain errors. The explicit .97-only option is preserved.
 
-## Source and regression checks
+The exact new Log folder already contained the state, monthly CSV and worker lock. No folder, business download, log or credential file was relocated or reset. Retired settings aliases migrate on load; custom paths/accounts/timing remain intact. Only known exact own project startup commands can migrate. The strict cleanup allowlist now names the new .97 share and still preserves every folder, contents and links.
 
-- Compilation and whitespace checks passed. Existing background/desktop/cleanup regressions remain passing.
-- Simulated Bangkok boundaries cover 21:59:59, 22:00, midnight, 04:59:59 and 05:00. Manual resume persists across midnight/restart and expires the following night. Late startup and missed-night wakeups do not delete a new day's files.
-- The real monitor loop finishes an active Pre account across 22:00, pauses mail scans and Post, then resumes on a manual command. A separate monitor check resumes scans exactly at 05:00 without a manual override.
-- Regression tests cover a mail scan or cleanup operation crossing 22:00: recheck the current Bangkok gate before claiming another account, preventing a stale pre-22:00 decision from starting new work afterward.
-- GUI lifecycle tests cover close-to-tray, tray failure staying visible, early reopen, deferred resume during cleanup, full exit stopping both workers, and maintenance continuing after Stop.
-- A synchronized two-thread test proves manual resume cannot change shared state while another history write owns its lock; the persisted override remains valid across restart.
-- Windows startup tests use a mocked registry: only the exact own HKCU Run value may be written/removed; conflicting commands are preserved. Manual duplicate launch signals the existing instance; background duplicates stay hidden.
-- Existing cleanup, exact-root/folder preservation, lock cooperation, no-redownload journal, credentials, daily mail triggers, portal paging and delivery regressions remain passing. Legacy scheduled CLI is now tested as a harmless no-op, including with missing/corrupt settings.
-- All **16 source offline checks passed**, including custom preferences and actual native Windows tray/instance-handle lifecycle checks. Business-file deletions use temporary roots only.
+## Source validation
 
-## Actual executable checks
+- Before editing: **298 tests and 4 subtests passed**.
+- After editing: **306 tests and 4 subtests passed**. Existing unrelated KDE matching, Outlook, queue, paging, cleanup, DPAPI and desktop regressions remain passing.
+- New regressions prove .243-first publication, actual .243 as the .97 copy source, no .97 publication after .243 denial, recoverable .97 copy denial, no second portal download on repair, cache cleanup after success, exact alias migration/idempotence/custom-path preservation, and scoped own-startup command migration.
+- All **16 source offline checks passed**. The real offline browser fixture uses both 30-row selector styles and sequential Pre/Post sessions, asserts the source of every .97 copy, copies an existing .243 file without a browser download, and makes no downloads on the second sweep.
+- Production portal/mail content is never used by these checks. Deletion tests use temporary roots and mocked approval lists only.
 
-- The actual EXE passed all **16 packaged offline checks**, including custom preference persistence and actual queue/clock behavior. Both diagnostics exited with code 0 using provider-qualified PowerShell UNC output paths; reports identify the tested executable hash.
-- The Thai packaged GUI passed; Settings was visually inspected. Close-to-tray/reopen, startup preference, 22:00/05:00 text, existing history/countdown, Stop, Show password and supplied icon are present.
-- An end-to-end run of the real EXE with an isolated profile passed: starts hidden, duplicate background launch stays hidden, manual duplicate reopens the same native window, X hides while the process remains alive, and tray Exit ends the process successfully. That profile has no valid portal credentials, disabled cleanup, temporary destinations/logs and disabled startup.
-- Packaged offline-check results are recorded in docs/verification/packaged-check-3.8.0.json. GUI and background evidence are gui-3.8.0.json and background-3.8.0.json. Reports are local verification artifacts, excluded from Git.
-- The Thai packaged guide matches docs/QUICK_START.md. Portable top level remains EXE, _internal and Quick start.md. Browser included; OCR absent; no user credentials/settings/business files bundled.
+## Actual executable validation
 
-Tested EXE SHA-256: `4e64ffd6354651ad5438af6e1949b2b80bf4e46f4852c03c491d77ebf286be6d`.
+- The built Thai GUI passed: four Settings sections, .243-first storage labels, exact new paths, 270/60-second defaults, 30 portal rows, current-day/sequential policy, Stop/password controls and icon. The storage screenshot was visually inspected.
+- The actual EXE background lifecycle passed in an isolated profile: hidden launch, background duplicate remains hidden, manual reopen shows the same window, X hides without exiting, and tray Exit ends normally. No valid portal credentials, production destinations, cleanup, startup registration or task registration were used.
+- All **16 actual packaged offline checks passed**, including the real .243-first browser fixture. Hash-linked policy reports and final promotion are recorded under `docs/verification`.
+- Before/after SHA-256 inventories match for every existing .97 business download and shared Log/state file. The existing Checked folder remains untouched.
 
-Supplied icon SHA-256 remains `8ad034733f09aeaca0ca829db1845eb738550f8b6717b574009b9d251060a587`.
+Tested EXE SHA-256: `8fb39eb23bd89c5832e6d393f6f3a05607faf0a3233428b83ef92e557b17253c`.
+
+Local reports: `source-check-3.8.1.json`, `packaged-check-3.8.1.json`, `gui-3.8.1.json`, `background-3.8.1.json`, `build.json`, `paths-3.8.1-before.json` and `paths-3.8.1-after.json`. They are excluded from Git.
 
 ## Deployment boundary
 
-Checks ran on **.73**, accessing the project on **.97**. Actual .97 Outlook/KDE sessions, share deletion rights, Windows sign-in startup activation, legacy task removal and the first real 22:00/05:00 transition remain unverified. Open the stable portable on .97 to activate its own-user startup preference; Settings reports the result. No Task Scheduler setup is required. A leftover legacy task's action no longer deletes files.
+Checks run on **.73** against the project share on **.97**. Live .97 Outlook/KDE login, actual business-file write/delete rights, own-user sign-in startup activation and the first real timed cleanup/resume remain target-machine checks. No production file was created, deleted or overwritten, and no permissions were changed during verification.
 
-Timed actions require KDE to remain running in the tray, with the computer awake and Windows signed in. Full Exit/off/sleep/sign-out cannot perform them. With default settings, at 22:00 the active account finishes before direct-file cleanup; all folders and nested contents survive. At 05:00 tracking resumes; opening KDE can resume earlier when automatic tracking is enabled. These timings and switches are configurable. Today's deleted names are not restored that day, and the next day never downloads yesterday's rows.
+Open the stable `portable\KDE Bot Download V3.exe` on .97 after replacement. Existing settings load with known path aliases updated; verify **ดาวน์โหลด .243 → คัดลอก .97** in Settings. Existing custom folders are deliberately retained rather than guessed. Windows startup activation occurs on .97 from the stable bundle; Task Scheduler is not required.
 
-**No production files were deleted, no startup registry entries or tasks were installed/run, and no permissions were changed during verification.** Local credentials, shared logs/state and other applications were preserved.
+Keep KDE running in the tray, Windows signed in and the machine awake for timed actions. Full Exit, sleep or power-off cannot perform cleanup. Defaults remain 22:00 cleanup/pause and 05:00 resume, with no missed-night catch-up and no same-day restoration of intentionally deleted files. Existing user timing choices are preserved.

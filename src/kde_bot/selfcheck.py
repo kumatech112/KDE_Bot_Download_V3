@@ -793,6 +793,14 @@ def check_daily_native_round(root: Path) -> None:
     def local_logout(engine, page, account, _timeout):
         page_evidence.append((account.username, page.evaluate("({size:window.pageSize,events:window.events})")))
         engine.session_owned = False
+    from . import storage
+    original_copy = storage.verified_copy
+    copy_targets = []
+    def chained_copy(source, target, digest):
+        if target.parent == Path(settings['new_dir']):
+            assert source == Path(settings['original_dir']) / target.name
+        copy_targets.append(target)
+        return original_copy(source, target, digest)
     original_download = DailyDownloader.download_to_cache
     def native_download(engine, page, index, timeout):
         downloaded.append(page.locator("tbody tr").nth(index).locator("td").nth(1).inner_text())
@@ -802,16 +810,18 @@ def check_daily_native_round(root: Path) -> None:
             patch.object(StructuredDownloader, "_logout_browser_session", local_logout), \
             patch.object(StructuredDownloader, "_post_auth", side_effect=AssertionError("Account-wide reset")), \
             patch.object(DailyDownloader, "download_to_cache", native_download), \
+            patch("kde_bot.storage.verified_copy", chained_copy), \
             patch("kde_bot.workflow.MailEvidenceReader", side_effect=AssertionError("Content matching or OCR was used")):
         for sequence in (1, 2):
             jobs = [{"account": account["username"], "label": account["label"], "work_date": today(), "sequence": sequence} for account in settings["accounts"]]
             outcomes = [run_daily_account(settings, job, threading.Event(), reporter, history, root) for job in jobs]
             assert all(outcome["kind"] == "complete" for outcome in outcomes), outcomes
-            assert set(downloaded) == {"post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip", "already-original.zip"} | {f"daily-{index:02}.csv" for index in range(26)}
-            assert len(downloaded) == 32
+            assert set(downloaded) == {"post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip"} | {f"daily-{index:02}.csv" for index in range(26)}
+            assert len(downloaded) == 31
     assert len(visited) == 4
+    assert len(copy_targets) == 63  # 31 downloads saved twice, plus one existing .243 copy.
     expected = {"post-only.bin", "pre-only.csv", "report.xlsx.gpg", "report.zip.gpg", "shared.zip"} | {f"daily-{index:02}.csv" for index in range(26)}
-    assert len(history.data["files"]) == 32  # .243-only presence still requires a fresh KDE download.
+    assert len(history.data["files"]) == 32  # Includes the existing .243 file copied to .97 without downloading again.
     from .activity import read_activity
     activity, _latest = read_activity(Path(settings["log_dir"]), exact_names=True)
     completed = {event["filename"] for event in activity if event["status"] == "complete"}
@@ -829,7 +839,7 @@ def check_daily_native_round(root: Path) -> None:
 def run_self_check(output: Path) -> int:
     result = {"checks": [], "live_portal_access": False, "business_files_modified": False,
               "download_policy": "daily_all", "ocr_enabled": False, "mail_delay_seconds": 270,
-              "tracker_source": "new_dir", "sequential_accounts": True, "page_by_page": True, "portal_rows_per_page": 30,
+              "tracker_source": "new_dir", "delivery_order": ["original_dir", "new_dir"], "copy_source": "original_dir", "sequential_accounts": True, "page_by_page": True, "portal_rows_per_page": 30,
               "daily_cleanup_time": '22:00', "daily_cleanup_preserves_all_folders": True,
               "daily_cleanup_skips_deleted_names": True, "daily_cleanup_task_registered_live": False,
               "task_scheduler_required": False, "tracking_pause": '22:00', "tracking_resume": '05:00'}

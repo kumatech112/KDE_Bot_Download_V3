@@ -1,4 +1,29 @@
-# KDE 3.8.0 data flow and changed functions
+# KDE 3.8.1 data flow and changed functions
+
+## 3.8.1 new shares and .243-first delivery
+
+Current data flow: incoming data-mail metadata → persisted 270-second trigger → sequential Pre/Post portal sessions → today-only 30-row page → exact .97 duplicate check → validated local staging (only when no usable existing source) → CREATE_NEW/hash-verified .243 final file → copy from the verified .243 file → CREATE_NEW/hash-verified .97 final file. Exact .243-only presence can supply the copy; recorded hash conflicts preserve both existing content and pending state. Explicit .97-only storage bypasses .243. The inherited generic publisher retains its original source-selection behavior.
+
+| File | Function | Change |
+|---|---|---|
+| settings.py | default_settings | New user-supplied copy and Log shares |
+| settings.py | migrate_folder_paths | Exact retired alias migration only; custom paths and credentials preserved |
+| settings.py | normalize_settings | Apply path migration on load/save/import |
+| daily_download.py | daily_folders | Standard ordering: original_dir (.243), new_dir (.97) |
+| daily_download.py | DailyDelivery.source_after_publish | Chain each subsequent copy from its verified preceding destination |
+| daily_download.py | DailyDownloader.__init__ | Allow exact existing .243 files to supply the .97 copy |
+| storage.py | Delivery.source_after_publish | Default hook preserves generic/legacy delivery source behavior |
+| storage.py | Delivery._deliver | Separate publication source from retained staging/cache source; preserve recovery and cache cleanup |
+| startup.py | owned_startup_commands | Whitelist only current and exact known KDE startup aliases |
+| startup.py | configure_startup | Safely update/remove its own old project command; reject all other commands |
+| cleanup.py | APPROVED_ROOTS | Replace retired .97 alias with exact new copy share; nonrecursive folder protection unchanged |
+| gui.py | MODES, Application.build_settings, launch/capture | Thai .243-first labels/order and actual new paths in smoke evidence |
+| selfcheck.py | check_daily_native_round, run_self_check | Real offline browser downloads assert every .97 copy reads .243; existing .243 avoids download |
+| tools/promote_portable.py | main | Require matching executable-hash reports of .243-first policy |
+
+Regression functions are individually identified in `tests/test_path_delivery.py`: `test_known_path_migration_preserves_accounts_and_preferences`, `test_daily_publication_uses_verified_243_before_97_and_recovers`, and `test_startup_migrates_only_known_own_legacy_command`. The updated `tests/test_daily_download.py::test_243_only_presence_copies_without_another_kde_download` verifies reuse of the .243 file. All tests use isolated temporary files or mocked registry access.
+
+Existing `KDE_State.json`, monthly CSV and lock are already present in the exact new Log folder; no state reset or business-file relocation is needed. Program source/bundle stay in the user's current project structure. Version notes below record earlier behavior; this section supersedes their former .97-first policy.
 
 ## 3.8.0 grouped preferences
 

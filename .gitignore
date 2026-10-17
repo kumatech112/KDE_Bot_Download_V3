@@ -16,3 +16,4 @@ KDE_Log_*.csv
 *.tmp
 .kde.lock
 docs/verification/
+Thumbs.db

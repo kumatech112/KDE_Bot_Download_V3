@@ -66,6 +66,9 @@ def main() -> int:
         report = json.loads((ROOT / "docs/verification" / name).read_text(encoding="utf-8"))
         if report.get("exe_sha256") != metadata["sha256"] or report.get("live_portal_access") is not False:
             raise ValueError("Actual executable verification is missing or belongs to another bundle")
+        if not name.startswith('background') and (report.get('delivery_order') != ['original_dir', 'new_dir']
+                                                     or report.get('copy_source') != 'original_dir'):
+            raise ValueError('Verification does not identify the .243-first delivery policy')
         if name.startswith("packaged") and (report.get("status") != "passed" or report.get("download_policy") != "daily_all" or report.get("ocr_enabled") is not False):
             raise ValueError("Packaged self-check failed")
         if name.startswith('background') and (report.get('status') != 'passed' or not all(report.get(key) is True for key in

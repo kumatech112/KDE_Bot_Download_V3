@@ -33,7 +33,7 @@ STATUS_LABELS = {"running": 'กำลังทำงาน', "stage_complete": 
                  "warning": 'ต้องตรวจสอบ', "summary": 'การทำงาน', "waiting": 'รอทำงาน', "notice": 'ข้อมูล'}
 JOB_LABELS = {"waiting": 'รอทำงาน', "running": 'กำลังทำงาน', "complete": 'เสร็จแล้ว', "copy_pending": 'รอบันทึกไฟล์',
               "exhausted": 'รอเมลใหม่', "deferred": 'รอเมลใหม่', "review": 'ต้องตรวจสอบ', "expired": 'ข้ามงานวันก่อน'}
-MODES = {"เก็บ .97 และคัดลอก .243": "both", "เก็บ .97 อย่างเดียว": "new"}
+MODES = {"ดาวน์โหลด .243 → คัดลอก .97": "both", "เก็บ .97 อย่างเดียว": "new"}
 
 
 def application_icon_path() -> Path:
@@ -260,8 +260,8 @@ class Application(ttk.Frame):
             self.add_field(frame, 2, 'รหัสผ่าน', prefix + "password", password=True)
         storage = self.settings_sections['storage']
         self.add_field(storage, 0, 'การจัดเก็บ', 'storage_mode', choices=list(MODES))
-        self.add_field(storage, 1, 'ดาวน์โหลด .97', 'new_dir', browse=True)
-        self.add_field(storage, 2, 'คัดลอก .243', 'original_dir', browse=True)
+        self.add_field(storage, 1, 'ดาวน์โหลด .243', 'original_dir', browse=True)
+        self.add_field(storage, 2, 'คัดลอก .97', 'new_dir', browse=True)
         self.add_field(storage, 3, 'ประวัติ', 'log_dir', browse=True)
         ttk.Label(storage, text='การลบอัตโนมัติเก็บทุกโฟลเดอร์ รวม Check ไว้').grid(row=4, column=0, columnspan=3, sticky='w', pady=12)
         timing = self.settings_sections['timing']
@@ -849,7 +849,7 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                 reason = "ไม่มีสิทธิ์บันทึกไฟล์ปลายทาง" if index == 10 else ["พบเมลใหม่ รอ 4 นาที 30 วินาที", "ตรวจวันที่ปัจจุบันจากคอลัมน์บนเว็บ", 'เข้าสู่ระบบสำเร็จ', "ตรวจไฟล์ที่บันทึกไว้ใน .97", "ตรวจสอบไฟล์ดาวน์โหลดแล้ว", "บันทึกไฟล์ปลายทางแล้ว", "ออกจากระบบแล้ว"][index % 7]
                 app.accept_event({"key": f"sample-{index}", "time": f"{today()}T10:02:{index:02}+07:00", "step": 7 if index == 10 else 2 + index % 6,
                                   "status": "error" if index == 10 else "stage_complete", "reason": reason, "account": "Pre" if index % 2 == 0 else "Post",
-                                  "filename": f"ตัวอย่างไฟล์ {index + 1}", "destination": r"\\10.0.0.97\Z Bot KDE", "attempt": 1})
+                                  "filename": f"ตัวอย่างไฟล์ {index + 1}", "destination": r"\\10.0.0.97\Z KDE Bot", "attempt": 1})
             app.render_results()
             app.filter.set("ไม่มีสิทธิ์")
             children = app.activity_table.get_children()
@@ -937,7 +937,7 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                       "busy_status_visible": any('บัญชีมีผู้ใช้งาน' in app.job_table.item(key, "values") for key in app.job_table.get_children()),
                       "download_policy": "daily_all", "email_content_matching": False, "ocr_enabled": False,
                       "skip_either_destination": False, "busy_attempts_total": None,
-                      "tracker_source": "new_dir", "sequential_accounts": True, "portal_rows_per_page": 30,
+                      "tracker_source": "new_dir", "delivery_order": ["original_dir", "new_dir"], "copy_source": "original_dir", "sequential_accounts": True, "portal_rows_per_page": 30,
                       "page_by_page": True, "login_retry_unlimited": True,
                       "mail_health_display_passed": mail_health_passed, "whole_mailbox_trigger": True, "stop_at_older_dates": True,
                       "daily_cleanup_enabled": app.settings['daily_cleanup_enabled'], "daily_cleanup_time": '22:00',

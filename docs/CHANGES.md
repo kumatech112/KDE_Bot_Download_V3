@@ -1,3 +1,10 @@
+# KDE Bot Download V3 — 3.8.1
+
+- Follow the user-created shares: .97 copies in `\\10.0.0.97\Z KDE Bot`; existing history/queue in `\\10.0.0.97\Z Log Bot\KDE Log Bot`.
+- Standard delivery saves/verifies .243 first, then copies from that verified file to .97. Reuse exact .243 files when .97 is missing; retain .97 duplicate checks, no overwrite and recoverable failures.
+- Migrate only exact retired settings aliases and known own startup commands. Preserve custom settings, credentials and existing state. Update the strict cleanup allowlist to the new .97 share; preserve every folder including Check/Checked.
+- Update Thai storage labels, offline delivery-order checks, release gate and documentation. Keep the existing project folders, email trigger/timing and sequential today-only portal traversal.
+
 # KDE Bot Download V3 — 3.8.0
 
 - Group settings into Accounts, Storage, Timing and Application; remove the separate Advanced window and general explanatory banners.
