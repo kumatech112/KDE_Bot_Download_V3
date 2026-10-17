@@ -35,6 +35,7 @@ def default_settings() -> dict[str, Any]:
         "mail_poll_seconds": 15,
         "mail_delay_seconds": 270,
         "login_retry_seconds": 60,
+        "daily_cleanup_enabled": True,
         "max_session_attempts": 2,
         "page_timeout_seconds": 60,
         "accounts": [
@@ -176,6 +177,8 @@ def import_settings(path: Path) -> tuple[dict[str, Any], list[str]]:
 
 
 def validate_settings(settings: dict[str, Any], require_credentials: bool = True) -> None:
+    if not isinstance(settings.get('daily_cleanup_enabled', True), bool):
+        raise ValueError('การลบไฟล์อัตโนมัติต้องเป็นค่าเปิดหรือปิด')
     if settings["storage_mode"] not in {"both", "original", "new"}:
         raise ValueError("Choose a storage mode.")
     for key in ("page_timeout_seconds", "max_pages", "search_days"):

@@ -1,3 +1,11 @@
+# KDE Bot Download V3 — 3.6.0
+
+- Add once-daily 22:00 Bangkok cleanup of regular direct files in both approved download roots; preserve every folder, its contents and links. Resolve/validate roots and children; no recursion or forced permission changes.
+- Register the current user's Windows task locally on .97 when the stable portable opens. Run headlessly with KDE closed while that user remains signed in. No stored password, elevation, missed-run catch-up or immediate task launch during setup.
+- Coordinate headless/in-app cleanup through the existing worker lock and one transient request in Log; wait for active downloads. Keep compact per-day results and per-file outcomes in existing state/monthly CSV.
+- Journal deletion intentions before unlink and retain removed names. Prevent same-day download/repair restoration after deletion or restart; preserve exact extensions and next-day behavior.
+- Add a Thai enable/disable control, local task-setup status and History stage. Task setup remains visibly unverified until registration succeeds on .97.
+
 # KDE Bot Download V3 — 3.5.1
 
 - Stop forward pagination at the first older-date boundary after downloading today's rows; select descending date sort when available and reject visibly inconsistent order. Preserve 30 rows/page, Pre then Post, .97 filename skips and 270/60-second timing.

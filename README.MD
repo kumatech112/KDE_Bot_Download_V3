@@ -1,4 +1,4 @@
-# KDE Download — 3.5.1
+# KDE Download — 3.6.0
 
 Thai Windows GUI with การทำงาน (Monitor), ประวัติการทำงาน (History) and ตั้งค่า (Settings). Open **portable\KDE Bot Download V3.exe**; keep **_internal** beside it. The pinned browser is included. Python and OCR are not required on the deployment computer.
 
@@ -16,6 +16,16 @@ Thai Windows GUI with การทำงาน (Monitor), ประวัติ�
 - A successful empty scan returns to waiting for new mail. Download/navigation failures retain completed files and wait for another mail/manual round; only login availability retries every minute.
 - Keep compact shared state/monthly CSV, local DPAPI credentials/cache, exact filename history, graceful Stop and the supplied icon.
 
+## Daily cleanup at 22:00 Bangkok
+
+- Delete only regular files directly in **both** `\\10.0.0.243\pgp-data$` and `\\10.0.0.97\Z Bot KDE`, regardless of the download storage mode. Never recurse, follow links or remove a folder. All folders and their contents survive, including the observed `03 Check` and `Checked`.
+- Persist deleted/pending-deletion filenames in the shared state. Today's intentionally deleted files are not downloaded or repaired back that day, including after restart; different filenames/extensions and the next day's files still follow the normal download policy.
+- Cleanup waits for the current account download/logout to finish. It runs once per Bangkok day, logs deletions/failures in the existing monthly CSV and leaves locked/denied files in place. Stop can interrupt the in-app pass; restarting never repeats a partially completed deletion pass against later arrivals.
+- Opening the stable portable EXE on **.97** installs or updates a Windows task for the signed-in user. The task runs at **22:00 even with KDE closed**, using that user's existing share access and without storing a password. If KDE is running, a small request in the Log folder coordinates the same cleanup under the existing shared worker lock.
+- .97 must be on and that Windows user signed in; the screen may be locked. There is no missed-night catch-up after shutdown/sign-out. Local task registration status appears in Settings. Uncheck the 22:00 option and save to disable both the timer and that user's task.
+
+Remote Task Scheduler access from the builder was denied. The release is prepared to register locally when opened on .97; live registration and real business-file deletion are not claimed by offline verification.
+
 The reported RuntimeError was found in the shared log: the old complete-catalogue page limit stopped downloads before they began. The new forward page processor starts saving immediately, derives traversal room from pagination totals with a safe fallback, detects unchanged/repeated pages and preserves already-saved files on later errors. A regression reproduces 77 rows with the old max_pages=1 setting.
 
 ## Destinations
@@ -28,7 +38,7 @@ The reported RuntimeError was found in the shared log: the old complete-catalogu
 
 Select .97 only, or .97 plus .243. The older original-only choice migrates to both so .97 remains authoritative. No business-folder tracker/probe/log/temp file or account folder is created. Only final downloaded files are saved there. Existing zero-byte files or conflicting content remain visible failures, never automatic overwrites.
 
-Local settings, encrypted passwords and validated pending sources remain under `%LOCALAPPDATA%\KDE Bot Download V3`. The Log folder holds one schema-3 state, one CSV per month and the worker lock. One monitor may own that shared Log at a time.
+Local settings, encrypted passwords, validated pending sources and one overwritten scheduled-task result remain under `%LOCALAPPDATA%\KDE Bot Download V3`. The Log folder holds one schema-3 state, one CSV per month, the worker lock and a transient cleanup request only while coordination is pending. One worker may own that shared Log at a time.
 
 See the [Thai Quick Start](docs/QUICK_START.md), [function map](docs/ARCHITECTURE.md), [changes](docs/CHANGES.md) and [verification](docs/VERIFICATION.md).
 

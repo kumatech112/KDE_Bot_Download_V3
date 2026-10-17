@@ -515,6 +515,64 @@ def check_arrival_metadata(root: Path) -> None:
         assert len(scan_arrivals(settings, threading.Event())) == 2
 
 
+def check_daily_cleanup(root: Path) -> None:
+    from datetime import timedelta
+    from . import cleanup
+    from .cleanup_task import task_definition
+    from .evidence import BANGKOK
+    import win32com.client
+    import win32security
+
+    settings = default_settings()
+    for key in ('original_dir', 'new_dir', 'log_dir'):
+        folder = root / ('cleanup-' + key)
+        folder.mkdir()
+        settings[key] = str(folder)
+    for key in ('original_dir', 'new_dir'):
+        folder = Path(settings[key])
+        (folder / 'purged.zip').write_bytes(b'offline final file')
+        for name in ('03 Check', 'Checked', 'another folder'):
+            protected = folder / name
+            protected.mkdir()
+            (protected / 'keep.zip').write_bytes(b'protected content')
+    clock = [datetime.now(BANGKOK).replace(hour=21, minute=59, second=59, microsecond=0)]
+    history = History(Path(settings['log_dir']))
+    reporter = Reporter(history, lambda _event: None)
+    with patch.object(cleanup, 'APPROVED_ROOTS', (settings['original_dir'], settings['new_dir'])), \
+            patch.object(cleanup, 'current_time', side_effect=lambda: clock[0]):
+        scheduler = cleanup.DailyCleanup(settings, history, reporter, clock[0].timestamp())
+        scheduler.tick(clock[0].timestamp(), False, threading.Event())
+        assert (Path(settings['new_dir']) / 'purged.zip').is_file()
+        clock[0] = clock[0].replace(hour=22, minute=0, second=0)
+        assert scheduler.tick(clock[0].timestamp(), True, threading.Event())
+        scheduler.tick(clock[0].timestamp(), False, threading.Event())
+        for key in ('original_dir', 'new_dir'):
+            folder = Path(settings[key])
+            assert not (folder / 'purged.zip').exists()
+            assert len(list(folder.glob('*/keep.zip'))) == 3
+        restored = History(history.folder)
+        assert cleanup.was_cleaned(restored, 'PURGED.ZIP')
+        assert cleanup.run_scheduled_cleanup(settings) == 0
+        assert not cleanup.request_path(settings).exists()
+        # A subsequent night's standalone pass owns the real worker lock, with no GUI.
+        headless = Path(settings['new_dir']) / 'headless-only.zip'
+        headless.write_bytes(b'headless offline download')
+        clock[0] += timedelta(days=1)
+        assert cleanup.run_scheduled_cleanup(settings) == 0
+        assert not headless.exists() and not cleanup.request_path(settings).exists()
+        assert History(history.folder).data['daily_cleanup']['deleted_names'] == ['headless-only.zip']
+        assert all(len(list(Path(settings[key]).glob('*/keep.zip'))) == 3 for key in ('original_dir', 'new_dir'))
+    # Construct a real Task Scheduler definition in memory; never register or run it.
+    service = win32com.client.Dispatch('Schedule.Service')
+    service.Connect()
+    sid = win32security.ConvertSidToStringSid(win32security.ConvertStringSidToSid('S-1-5-21-1-2-3-1001'))
+    definition = task_definition(service, root / 'offline-never-executed.exe', sid, clock[0])
+    assert 'T22:00:00+07:00' in definition.Triggers.Item(1).StartBoundary
+    assert definition.Principal.LogonType == 3 and definition.Principal.RunLevel == 0
+    assert definition.Actions.Item(1).Arguments == '--scheduled-cleanup'
+    assert definition.Settings.StartWhenAvailable is False
+
+
 def check_daily_queue(root: Path) -> None:
     from .daily_download import DailyQueue
     from .evidence import today
@@ -661,7 +719,9 @@ def check_daily_native_round(root: Path) -> None:
 def run_self_check(output: Path) -> int:
     result = {"checks": [], "live_portal_access": False, "business_files_modified": False,
               "download_policy": "daily_all", "ocr_enabled": False, "mail_delay_seconds": 270,
-              "tracker_source": "new_dir", "sequential_accounts": True, "page_by_page": True, "portal_rows_per_page": 30}
+              "tracker_source": "new_dir", "sequential_accounts": True, "page_by_page": True, "portal_rows_per_page": 30,
+              "daily_cleanup_time": '22:00', "daily_cleanup_preserves_all_folders": True,
+              "daily_cleanup_skips_deleted_names": True, "daily_cleanup_task_registered_live": False}
     try:
         with tempfile.TemporaryDirectory(prefix="kde-v3-exe-check-") as temporary:
             root = Path(temporary)
@@ -745,6 +805,8 @@ def run_self_check(output: Path) -> int:
             result["checks"].append("Whole data mailbox incoming IDs only; read mail included; no subject/body/images read; legacy folder ignored; SMTP/store resolution; outgoing/Notes excluded; fake COM only")
             check_daily_queue(root)
             result["checks"].append("270-second arrival window, persisted mail IDs, sequential accounts, busy retry beyond two attempts at 60 seconds, restored 270-second cooldown after success, no idle portal loop")
+            check_daily_cleanup(root)
+            result['checks'].append('22:00 cleanup in temporary roots only; all Check/other folders preserved; active-download wait; persistent no-redownload names; headless idempotence; real Windows task definition in memory only, no task registration')
             check_flat_storage(root)
             result["checks"].append("Two concurrent accounts store verified files directly in shared destination roots; legacy account subfolders ignored in all three modes")
             check_destination_preflight(root)

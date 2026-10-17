@@ -227,6 +227,26 @@ class History:
                         or not all(isinstance(job.get(field), str) for field in ("id", "account", "label", "work_date"))):
                     raise ValueError("Invalid daily account queue; original data preserved.")
 
+        cleanup = self.data.get('daily_cleanup')
+        if cleanup is not None:
+            if (not isinstance(cleanup, dict) or not isinstance(cleanup.get('day'), str)
+                    or cleanup.get('status') not in {'running', 'complete', 'errors', 'stopped'}
+                    or not isinstance(cleanup.get('roots'), dict)):
+                raise ValueError('Invalid daily cleanup state; original data preserved.')
+            try:
+                if datetime.strptime(cleanup['day'], '%Y-%m-%d').date().isoformat() != cleanup['day']:
+                    raise ValueError('Noncanonical cleanup date')
+            except ValueError as error:
+                raise ValueError('Invalid daily cleanup date; original data preserved.') from error
+            for field in ('deleted_names', 'pending_names'):
+                if not isinstance(cleanup.get(field, []), list) or not all(isinstance(name, str) and name and Path(name).name == name for name in cleanup.get(field, [])):
+                    raise ValueError('Invalid cleanup filename history; original data preserved.')
+            for result in cleanup['roots'].values():
+                if (not isinstance(result, dict)
+                        or not all(type(result.get(key)) is int and result[key] >= 0 for key in ('deleted', 'preserved', 'errors'))
+                        or not isinstance(result.get('stopped'), bool)):
+                    raise ValueError('Invalid daily cleanup result; original data preserved.')
+
     def save(self) -> None:
         with self.lock:
             atomic_json(self.path, self.data)

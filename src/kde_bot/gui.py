@@ -24,7 +24,7 @@ from .settings import import_settings, load_settings, save_settings, validate_se
 from .storage import History, WorkerLock, timestamp
 from .workflow import run_cycle
 
-STEPS = {1: "เริ่มต้น", 2: "ตรวจเมล", 3: "เข้าสู่ระบบ", 4: "ตรวจรายการ", 5: "ตรวจไฟล์", 6: "ดาวน์โหลด", 7: "บันทึกไฟล์", 8: "ออกจากระบบ"}
+STEPS = {1: "เริ่มต้น", 2: "ตรวจเมล", 3: "เข้าสู่ระบบ", 4: "ตรวจรายการ", 5: "ตรวจไฟล์", 6: "ดาวน์โหลด", 7: "บันทึกไฟล์", 8: "ออกจากระบบ", 9: "ลบไฟล์ 22:00"}
 
 
 STATUS_LABELS = {"running": 'กำลังทำงาน', "stage_complete": 'สำเร็จ', "complete": 'เสร็จแล้ว',
@@ -73,6 +73,7 @@ class Application(ttk.Frame):
         self.summary = tk.StringVar(value='ยังไม่มีรอบดาวน์โหลด')
         self.mail_health = {}
         self.mail_status = tk.StringVar(value='การตรวจเมล: ยังไม่ได้เริ่มทำงาน')
+        self.cleanup_status = tk.StringVar(value='ลบเฉพาะไฟล์ชั้นนอกทั้ง .243 และ .97 เก็บทุกโฟลเดอร์และไฟล์ข้างในไว้')
         self.current_step = tk.StringVar(value="เมลใหม่ → รอ 4 นาที 30 วินาที → ทำทีละบัญชี หน้าละ 30 รายการ → ตรวจไฟล์ซ้ำจาก .97")
         self.filter = tk.StringVar()
         self.follow_history = tk.BooleanVar(value=True)
@@ -102,6 +103,7 @@ class Application(ttk.Frame):
         if not smoke:
             root.after(400, self.auto_start)
             root.after(600, self.load_history)
+            root.after(1000, self.configure_cleanup_task)
 
     def build_controls(self) -> None:
         from PIL import Image, ImageTk
@@ -134,6 +136,7 @@ class Application(ttk.Frame):
         menu.add_command(label='นำเข้าการตั้งค่า', command=self.import_configuration)
         menu.add_command(label='นำเข้าประวัติเดิม', command=self.import_history)
         menu.add_command(label='เปิดโฟลเดอร์ประวัติ', command=self.open_logs)
+        menu.add_command(label='ตั้งค่างานลบเวลา 22:00', command=self.configure_cleanup_task)
         tools.configure(menu=menu)
         tools.pack(side="right")
         bar = ttk.Frame(self)
@@ -238,15 +241,16 @@ class Application(ttk.Frame):
             self.add_field(frame, 0, 'เปิดใช้งาน', prefix + "enabled", boolean=True)
             self.add_field(frame, 1, 'ชื่อผู้ใช้', prefix + "username")
             self.add_field(frame, 2, 'รหัสผ่าน', prefix + "password", password=True)
+        self.add_field(page, 7, 'ลบไฟล์ทุกวัน 22:00 (เก็บ Check ไว้)', 'daily_cleanup_enabled', boolean=True)
         buttons = ttk.Frame(page)
-        buttons.grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 12))
+        buttons.grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 12))
         save = ttk.Button(buttons, text='บันทึกและเริ่มทำงาน', command=self.save_configuration)
         save.pack(side="left")
         self.busy_buttons.append(save)
         advanced = ttk.Button(buttons, text='ตัวเลือกเพิ่มเติม', command=self.advanced_settings)
         advanced.pack(side="left", padx=10)
         self.busy_buttons.append(advanced)
-        ttk.Label(page, text="ดาวน์โหลดเฉพาะไฟล์วันที่ปัจจุบัน ทำทีละบัญชีและทีละหน้า หน้าละ 30 รายการ\nตรวจไฟล์ที่มีแล้วจาก .97 เท่านั้น · เมลใหม่รอ 4 นาที 30 วินาที · เข้าระบบไม่ได้รอครั้งละ 1 นาที", wraplength=1050).grid(row=8, column=0, columnspan=3, sticky="w")
+        ttk.Label(page, textvariable=self.cleanup_status, wraplength=1050).grid(row=9, column=0, columnspan=3, sticky="w")
 
     def advanced_settings(self) -> None:
         window = tk.Toplevel(self.root)
@@ -324,10 +328,27 @@ class Application(ttk.Frame):
             self.settings = self.collect_settings()
             validate_settings(self.settings)
             save_settings(self.settings)
+            self.configure_cleanup_task()
             self.notice_label.configure(text='บันทึกการตั้งค่าสำหรับผู้ใช้ Windows นี้แล้ว')
             self.start("watch")
         except Exception as error:
             messagebox.showerror('บันทึกการตั้งค่าไม่ได้', thai_text(str(error)), parent=self.root)
+
+    def configure_cleanup_task(self) -> None:
+        if self.smoke:
+            return
+        def work():
+            from .cleanup_task import configure_task
+            from .settings import settings_home
+            try:
+                if not (settings_home() / 'settings.json').is_file():
+                    message = 'บันทึกการตั้งค่าบนเครื่อง .97 ก่อนเปิดใช้งานลบไฟล์อัตโนมัติ'
+                else:
+                    message = configure_task(self.settings['daily_cleanup_enabled'])['message']
+            except Exception as error:
+                message = f'ตั้งงานลบ 22:00 ไม่สำเร็จ: {thai_text(error)}'
+            self.events.put(('cleanup_task', message))
+        threading.Thread(target=work, name='KDE-task-setup', daemon=True).start()
 
     def auto_start(self, force=False) -> None:
         if self.smoke and not force:
@@ -463,6 +484,10 @@ class Application(ttk.Frame):
                 self.status.set("ผิดพลาด: " + thai_text(value))
             elif kind == "notice":
                 self.status.set(thai_text(value))
+            elif kind == 'cleanup_task':
+                self.cleanup_status.set(value)
+                if 'ไม่สำเร็จ' in value:
+                    self.status.set(value)
             elif kind == "history":
                 activity, latest = value
                 self.activity.merge(activity)
@@ -682,6 +707,10 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
             app.set_busy(False)
             app.stop_event.clear()
             app.fill_settings()
+            cleanup_toggle_passed = bool(app.variables['daily_cleanup_enabled'].get())
+            app.variables['daily_cleanup_enabled'].set(False)
+            cleanup_toggle_passed &= app.collect_settings()['daily_cleanup_enabled'] is False
+            app.variables['daily_cleanup_enabled'].set(True)
             app.status.set("ติดตามเมล data · ไฟล์วันที่ปัจจุบัน · ทำทีละบัญชี")
             smoke_screenshot.parent.mkdir(parents=True, exist_ok=True)
             def screenshot(page, path):
@@ -707,6 +736,10 @@ def launch(smoke_screenshot: Path | None = None, smoke_report: Path | None = Non
                       "tracker_source": "new_dir", "sequential_accounts": True, "portal_rows_per_page": 30,
                       "page_by_page": True, "login_retry_unlimited": True,
                       "mail_health_display_passed": mail_health_passed, "whole_mailbox_trigger": True, "stop_at_older_dates": True,
+                      "daily_cleanup_enabled": app.settings['daily_cleanup_enabled'], "daily_cleanup_time": '22:00',
+                      "daily_cleanup_toggle_passed": cleanup_toggle_passed,
+                      "daily_cleanup_preserves_all_folders": True, "daily_cleanup_requires_monitor": False,
+                      "daily_cleanup_task_registered_live": False, "daily_cleanup_skips_deleted_names": True,
                       "includes_read_mail": not app.settings["mail_watch"]["unread_only"], "machine": socket.gethostname(), "live_portal_access": False}
             if smoke_report:
                 smoke_report.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -509,6 +509,11 @@ def run_cycle(settings: dict[str, Any], stop_event: threading.Event,
                     break
                 if not record.get("pending"):
                     continue
+                from .cleanup import was_cleaned
+                if was_cleaned(history, record['filename']):
+                    reporter.emit(9, 'skipped', 'ไฟล์นี้ถูกลบตามรอบ 22:00 แล้ว จึงไม่บันทึกกลับมาอีกในวันนี้',
+                                  record.get('account', ''), record['filename'], persist=True, count=True)
+                    continue
                 account = next((item for item in settings["accounts"]
                                 if item["enabled"] and item["username"] == record.get("account")), None)
                 if account is None:

@@ -1,4 +1,32 @@
-# KDE 3.5.1 data flow and changed functions
+# KDE 3.6.0 data flow and changed functions
+
+## 3.6.0 cleanup flow and function map
+
+Stable EXE startup on .97 → own-user Task Scheduler definition → daily 22:00+07:00 → headless entry without GUI/Outlook/portal credentials → validate saved settings → transient Log request → wait for shared WorkerLock or cooperate with running monitor → validate the two exact approved roots → regular direct children only → save deletion intent → unlink → save deletion name → monthly CSV result. In-app DailyCleanup.tick also fires at 22:00 while monitoring and waits until the active account finishes. No production cleanup is invoked during installation or verification.
+
+| File | Functions/classes | Change |
+|---|---|---|
+| cleanup.py | current_time, was_cleaned | Bangkok clock and exact filename/day deletion-history check |
+| cleanup.py | request_path, write_request, path_identity, validated_root, file_signature | Separate atomic Log request with unique temporary names and short Windows sharing retries; normalized/resolved approved roots; reparse-point refusal and fresh child metadata |
+| cleanup.py | cleanup_root | No recursion; preserve all directories/links; journal before/after unlink; per-file failure handling; Stop/midnight cancellation |
+| cleanup.py | DailyCleanup.__init__, requested_today, tick, run | 22:00 due time, cooperative request, active-download wait, once-per-day/crash behavior, compact shared results |
+| cleanup.py | run_scheduled_cleanup | No-GUI worker; early-run refusal; shared lock ownership; running-GUI cooperation; task exit status |
+| cleanup_task.py | on_cleanup_machine, task_definition, configure_task | .97 guard; daily offset-aware 22:00 definition; interactive current-user SID; no password/elevation/catch-up; verify registration; only own matching task may be updated/removed |
+| main.py | scheduled_cleanup_entry, main | Dedicated scheduled action; reject missing/corrupt settings; report task outcome locally; no GUI error dialog |
+| daily_download.py | DailyDownloader.handle_file, run_daily_monitor | Skip intentionally removed names; run cleanup between active account sessions |
+| workflow.py | run_cycle | Explicit cached-save repair also respects same-day deletion history |
+| storage.py | History.__init__ | Validate additive cleanup results/filename journal without changing schema 3 |
+| settings.py | default_settings, validate_settings | Enabled-by-default boolean cleanup preference; existing settings normalize additively |
+| gui.py | Application.__init__, build_controls, build_settings, save_configuration, configure_cleanup_task, drain_events, run.capture | Thai preference/status/stage; automatic local setup only outside smoke mode; expose 22:00/closed-app/no-redownload policy in GUI verification |
+| selfcheck.py | check_daily_cleanup, run_self_check | Temporary-root deletions and folder preservation, persistent no-redownload checks, in-memory real Windows task definition; no task is registered or run |
+
+Only the two approved download roots can be deleted from. User folders such as `03 Check` and `Checked` are not special-cased by spelling: all directories are preserved, so nested contents are never enumerated or removed. The cleanup runs against both roots even in .97-only download mode. File publication remains unchanged.
+
+Deletion intentions are saved before unlink. Successful names and uncertain crash-time names block same-day download/repair restoration; failed unlinks clear the pending name and leave the file. Cleanup history is additive and scoped to its Bangkok date; a different extension or next day's file is not conflated. A second run/restart cannot delete later arrivals that day.
+
+The external worker does not break the monitor's long-lived worker lock. It writes one atomic request under Log; a running monitor executes the pass after its active account closes, while a closed monitor lets the worker own the lock. The request is removed after completion. Errors/partial passes return a nonzero task result. Missed nights are not executed against a new day's files.
+
+Task registration occurs locally on .97 for the current user's interactive token, not SYSTEM/S4U, so the task uses that signed-in user's SMB access without storing a password. Root task names include that user's SID; mismatched principals/actions are refused. The task launches the stable portable EXE with --scheduled-cleanup, has one daily trigger and ignores overlapping invocations. The builder's remote scheduler access was denied; local activation remains a deployment boundary.
 
 ## 3.5.1 changes by function
 

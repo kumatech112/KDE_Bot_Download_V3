@@ -246,6 +246,11 @@ class DailyDownloader(StructuredDownloader):
             return "error"
         with self.delivery.history.file_lock(filename):
             try:
+                from .cleanup import was_cleaned
+                if was_cleaned(self.delivery.history, filename, self.work_day):
+                    self.reporter.emit(9, 'skipped', 'ไฟล์นี้ถูกลบตามรอบ 22:00 แล้ว จึงไม่ดาวน์โหลดกลับมาอีกในวันนี้',
+                                       account.label, filename, persist=True, count=True)
+                    return 'skipped'
                 existing = self.delivery.existing(Path(self.configuration["new_dir"]), filename)
                 if existing is not None:
                     self.reporter.emit(5, "skipped", "พบไฟล์ในโฟลเดอร์ .97 แล้ว จึงไม่ดาวน์โหลดซ้ำ",
@@ -433,6 +438,8 @@ def run_daily_account(settings, job, stop_event, reporter, history, temporary):
 
 
 def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch, requests=None, request_round=False):
+    from .cleanup import DailyCleanup
+
     reporter.file_key = exact_record_key
     pending = DailyQueue(history, settings)
     pending.recover(time.time())
@@ -444,6 +451,7 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
     last_summary = None
     last_scan_problem = None
     first_scan = True
+    cleanup = DailyCleanup(settings, history, reporter, time.time()) if watch else None
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="KDE-daily") as pool:
         while not stop_event.is_set():
             now = time.time()
@@ -485,7 +493,8 @@ def run_daily_monitor(settings, stop_event, reporter, history, temporary, watch,
                     if not watch:
                         break
                 next_scan = time.time() + settings["mail_poll_seconds"]
-            if not active and not stop_event.is_set():
+            cleanup_waiting = cleanup.tick(time.time(), bool(active), stop_event) if cleanup is not None else False
+            if not active and not cleanup_waiting and not stop_event.is_set():
                 for job in pending.claim(time.time()):
                     active[job["account"]] = pool.submit(run_daily_account, settings, job, stop_event, reporter, history, temporary)
             rows = pending.snapshot()
