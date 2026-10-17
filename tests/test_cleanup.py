@@ -11,7 +11,7 @@ import pytest
 
 from kde_bot import cleanup
 from kde_bot import daily_download as daily
-from kde_bot.cleanup_task import task_definition, configure_task
+from kde_bot.cleanup_task import task_definition, configure_task, scheduler_error_code
 from kde_bot.evidence import BANGKOK
 from kde_bot.settings import default_settings
 from kde_bot.storage import Delivery, History, Reporter, WorkerLock
@@ -220,8 +220,10 @@ def test_task_definition_has_2200_bangkok_daily_interactive_user_no_password(tmp
     assert result.Settings.StartWhenAvailable is False and result.Settings.MultipleInstances == 2
 
 
-def test_task_registration_and_disable_are_own_user_only_and_never_run_now(tmp_path):
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_task_registration_and_disable_are_own_user_only_and_never_run_now(tmp_path, wrapped):
     import win32com.client
+    import pywintypes
     portable = tmp_path / 'portable'
     portable.mkdir()
     executable = portable / 'KDE Bot Download V3.exe'
@@ -233,11 +235,11 @@ def test_task_registration_and_disable_are_own_user_only_and_never_run_now(tmp_p
         Actions=SimpleNamespace(Create=lambda _kind: action, Count=1, Item=lambda _index: action))
     registered = [None]
     calls = []
-    class MissingTask(Exception):
-        hresult = -2147024894
     def get_task(_name):
         if registered[0] is None:
-            raise MissingTask()
+            if wrapped:
+                raise pywintypes.com_error(-2147352567, 'Exception occurred.', (0, None, None, None, 0, -2147024894), None)
+            raise pywintypes.com_error(-2147024894, 'Task not found', None, None)
         return registered[0]
     def register(*args):
         calls.append(('register', args))
@@ -315,3 +317,44 @@ def test_scheduled_entry_rejects_missing_or_corrupt_user_settings_without_deleti
             patch('kde_bot.cleanup.run_scheduled_cleanup', side_effect=AssertionError('Invalid settings allowed deletion')):
         assert scheduled_cleanup_entry() == 1
     assert json.loads((local / 'cleanup_task_result.json').read_text(encoding='utf-8'))['exit_code'] == 1
+
+
+@pytest.mark.parametrize('outer,details,expected', [
+    (-2147024894, None, 0x80070002),
+    (-2147352567, (0, None, None, None, 0, -2147024894), 0x80070002),
+    (-2147352567, (0, None, None, None, 0, -2147024891), 0x80070005),
+    (-2147352567, None, 0x80020009),
+    (-2147352567, (0, None), 0x80020009),
+    (-2147024891, (0, None, None, None, 0, -2147024894), 0x80070005),
+])
+def test_scheduler_hresult_only_unwraps_actual_dispatch_exception(outer, details, expected):
+    import pywintypes
+    assert scheduler_error_code(pywintypes.com_error(outer, 'Exception occurred.', details, None)) == expected
+
+
+def test_scheduler_hresult_args_fallback_does_not_parse_error_text():
+    assert scheduler_error_code(Exception(-2147352567, 'Exception occurred.', (0, None, None, None, 0, -2147024894), None)) == 0x80070002
+    assert scheduler_error_code(Exception('file not found -2147024894')) is None
+
+
+@pytest.mark.parametrize('stage', ['lookup', 'register'])
+def test_unexpected_scheduler_errors_fail_with_stage_without_claiming_installed(tmp_path, stage):
+    import pywintypes
+    import win32com.client
+    executable = tmp_path / 'portable' / 'KDE Bot Download V3.exe'
+    executable.parent.mkdir()
+    executable.write_bytes(b'never executed')
+    def lookup(_name):
+        code = -2147024891 if stage == 'lookup' else -2147024894
+        raise pywintypes.com_error(-2147352567, 'Exception occurred.', (0, None, None, None, 0, code), None)
+    def register(*_args):
+        raise pywintypes.com_error(-2147352567, 'Exception occurred.', (0, None, None, None, 0, -2147024894), None)
+    root = SimpleNamespace(GetTask=lookup, RegisterTaskDefinition=register)
+    service = SimpleNamespace(Connect=lambda: None, GetFolder=lambda _path: root)
+    with patch('kde_bot.cleanup_task.on_cleanup_machine', return_value=True), \
+            patch('kde_bot.cleanup_task.sys.frozen', True, create=True), \
+            patch.object(win32com.client, 'Dispatch', return_value=service), \
+            patch('kde_bot.cleanup_task.task_definition', return_value=object()):
+        expected = 'ตรวจสอบงานลบไฟล์เดิม' if stage == 'lookup' else 'ลงทะเบียนงานลบไฟล์'
+        with pytest.raises(RuntimeError, match=expected):
+            configure_task(True, executable)

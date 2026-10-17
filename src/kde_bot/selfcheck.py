@@ -515,6 +515,31 @@ def check_arrival_metadata(root: Path) -> None:
         assert len(scan_arrivals(settings, threading.Event())) == 2
 
 
+def check_scheduler_missing_task() -> None:
+    """Reproduce a real missing-task COM exception in the GUI's thread model."""
+    import uuid
+    from .cleanup_task import scheduler_error_code
+
+    def lookup():
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()
+        try:
+            service = win32com.client.Dispatch('Schedule.Service')
+            service.Connect()
+            try:
+                service.GetFolder('\\').GetTask('KDE ReadOnly Missing ' + uuid.uuid4().hex)
+            except Exception as error:
+                assert scheduler_error_code(error) == 0x80070002, repr(error)
+                return
+            raise AssertionError('Random verification task unexpectedly exists')
+        finally:
+            pythoncom.CoUninitialize()
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='KDE-task-lookup-check') as pool:
+        pool.submit(lookup).result(timeout=30)
+
+
 def check_daily_cleanup(root: Path) -> None:
     from datetime import timedelta
     from . import cleanup
@@ -807,6 +832,8 @@ def run_self_check(output: Path) -> int:
             result["checks"].append("270-second arrival window, persisted mail IDs, sequential accounts, busy retry beyond two attempts at 60 seconds, restored 270-second cooldown after success, no idle portal loop")
             check_daily_cleanup(root)
             result['checks'].append('22:00 cleanup in temporary roots only; all Check/other folders preserved; active-download wait; persistent no-redownload names; headless idempotence; real Windows task definition in memory only, no task registration')
+            check_scheduler_missing_task()
+            result['checks'].append('Actual Windows background-thread missing-task lookup: nested COM SCODE 0x80070002 recognized for first setup; read-only, no task registered')
             check_flat_storage(root)
             result["checks"].append("Two concurrent accounts store verified files directly in shared destination roots; legacy account subfolders ignored in all three modes")
             check_destination_preflight(root)

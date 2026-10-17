@@ -11,6 +11,30 @@ from pathlib import Path
 from .evidence import BANGKOK
 
 
+def scheduler_error_code(error):
+    """Read a COM HRESULT, including a dispatch exception's nested SCODE."""
+    code = getattr(error, 'hresult', None)
+    arguments = getattr(error, 'args', ())
+    if not isinstance(code, int) and arguments and isinstance(arguments[0], int):
+        code = arguments[0]
+    if isinstance(code, int) and code & 0xFFFFFFFF == 0x80020009:
+        details = getattr(error, 'excepinfo', None)
+        if details is None and len(arguments) > 2:
+            details = arguments[2]
+        if isinstance(details, (tuple, list)) and len(details) > 5 and isinstance(details[5], int) and details[5]:
+            code = details[5]
+    return code & 0xFFFFFFFF if isinstance(code, int) else None
+
+
+def setup_error(stage, error):
+    code = scheduler_error_code(error)
+    reasons = {0x80070002: 'ไม่พบงานหรือไฟล์ที่อ้างอิง', 0x80070005: 'Windows ไม่อนุญาตให้ดำเนินการ',
+               0x80041315: 'บริการ Task Scheduler ยังไม่ทำงาน'}
+    reason = reasons.get(code, str(error))
+    suffix = f' (0x{code:08X})' if code is not None else ''
+    return RuntimeError(f'{stage}: {reason}{suffix}')
+
+
 def on_cleanup_machine():
     if socket.gethostname().casefold() == 'desktop0097-5k043lb':
         return True
@@ -68,13 +92,16 @@ def configure_task(enabled, executable=None):
             token.Close()
         name = 'KDE Bot Download Cleanup ' + user_sid
         service = win32com.client.Dispatch('Schedule.Service')
-        service.Connect()
-        root = service.GetFolder('\\')
+        try:
+            service.Connect()
+            root = service.GetFolder('\\')
+        except Exception as error:
+            raise setup_error('เชื่อมต่อ Task Scheduler ไม่สำเร็จ', error) from error
         try:
             existing = root.GetTask(name)
         except Exception as error:
-            if getattr(error, 'hresult', None) != -2147024894:  # ERROR_FILE_NOT_FOUND only.
-                raise
+            if scheduler_error_code(error) != 0x80070002:  # Expected on first setup, only at GetTask.
+                raise setup_error('ตรวจสอบงานลบไฟล์เดิมไม่สำเร็จ', error) from error
             existing = None
         if existing is not None:
             principal = existing.Definition.Principal.UserId
@@ -88,10 +115,16 @@ def configure_task(enabled, executable=None):
                 raise RuntimeError('งานเดิมอ้างถึงโปรแกรมอื่น จึงไม่เขียนทับ')
         if not enabled:
             if existing is not None:
-                root.DeleteTask(name, 0)
+                try:
+                    root.DeleteTask(name, 0)
+                except Exception as error:
+                    raise setup_error('ยกเลิกงานลบไฟล์ไม่สำเร็จ', error) from error
             return {'installed': False, 'message': 'ปิดการลบไฟล์อัตโนมัติแล้ว'}
         definition = task_definition(service, executable, user_sid, datetime.now(BANGKOK))
-        registered = root.RegisterTaskDefinition(name, definition, 6, user_sid, None, 3)
+        try:
+            registered = root.RegisterTaskDefinition(name, definition, 6, user_sid, None, 3)
+        except Exception as error:
+            raise setup_error('ลงทะเบียนงานลบไฟล์ไม่สำเร็จ', error) from error
         actual = registered.Definition
         if (actual.Actions.Count != 1 or Path(actual.Actions.Item(1).Path).resolve() != executable
                 or actual.Actions.Item(1).Arguments != '--scheduled-cleanup'

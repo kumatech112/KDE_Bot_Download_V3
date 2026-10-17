@@ -1,3 +1,9 @@
+# KDE Bot Download V3 — 3.6.1
+
+- Fix first-run task lookup: recognize ERROR_FILE_NOT_FOUND inside a DISP_E_EXCEPTION/excepinfo SCODE as well as a direct HRESULT. Continue creating the task only for the expected missing-task response from GetTask.
+- Keep genuine lookup, registration, connection and cancellation failures visible with the operation stage and normalized Windows code.
+- Reproduce the exact reported error using a read-only real Windows background-thread lookup; add wrapped/direct first-registration and error-propagation regressions. Preserve the 22:00 cleanup policy, folder protection, download guards, user identity and permissions.
+
 # KDE Bot Download V3 — 3.6.0
 
 - Add once-daily 22:00 Bangkok cleanup of regular direct files in both approved download roots; preserve every folder, its contents and links. Resolve/validate roots and children; no recursion or forced permission changes.

@@ -1,4 +1,15 @@
-# KDE 3.6.0 data flow and changed functions
+# KDE 3.6.1 data flow and changed functions
+
+## 3.6.1 first-run setup fix
+
+| File | Functions | Change |
+|---|---|---|
+| cleanup_task.py | scheduler_error_code | Normalize direct COM HRESULTs and unwrap only DISP_E_EXCEPTION's nested excepinfo SCODE; supports pywin32 attributes and structured args without parsing error text |
+| cleanup_task.py | setup_error | Readable Thai operation stage and hexadecimal Windows error code |
+| cleanup_task.py | configure_task | Treat only GetTask's 0x80070002 as first setup; continue creation; preserve other failures and all owner/action checks |
+| selfcheck.py | check_scheduler_missing_task, run_self_check | Real read-only Windows lookup in an initialized background COM thread; new packaged regression; no task registered |
+
+The reported tuple was reproduced exactly: outer HRESULT -2147352567 (DISP_E_EXCEPTION), excepinfo[5] -2147024894 (0x80070002). Version 3.6.0 checked only the outer hresult, so it rejected the normal first-run absence of a task. The fix applies only to the existing-task lookup. A missing-file error during RegisterTaskDefinition still fails and identifies registration as the failed stage. Access denied and other genuine errors never become an installed status.
 
 ## 3.6.0 cleanup flow and function map
 

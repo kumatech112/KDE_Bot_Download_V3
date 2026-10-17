@@ -1,42 +1,39 @@
-# Verification — 2026-10-17 — 3.6.0
+# Verification — 2026-10-17 — 3.6.1
 
-## Requested behavior
+## Reported error and confirmed cause
 
-Delete regular files directly in both \\10.0.0.243\pgp-data$ and \\10.0.0.97\Z Bot KDE every day at 22:00 Bangkok. Preserve every directory, link and nested file, including the observed 03 Check and Checked folders. Do not download or repair deleted filenames back that day. Support operation with KDE closed using a Windows task for the signed-in user on .97.
+The .97 screenshot showed outer COM HRESULT -2147352567 with excepinfo SCODE -2147024894. A read-only Windows Task Scheduler lookup in an initialized Python background thread reproduced the exact tuple: `(-2147352567, 'Exception occurred.', (0, None, None, None, 0, -2147024894), None)`.
+
+The inner code is 0x80070002: the task does not exist yet. Version 3.6.0 recognized only a direct outer ERROR_FILE_NOT_FOUND and therefore aborted normal first-time setup. Version 3.6.1 normalizes direct HRESULTs and unwraps only a COM dispatch exception's structured inner SCODE. GetTask's expected missing-task response now continues to registration. The same code during registration still fails; access denied and unknown errors never become success.
+
+Connection, existing-task lookup, registration and cancellation errors now identify their operation stage and Windows code in Thai. No permissions, user identity, task ownership checks, cleanup paths, 22:00 timing, folder protection or download policy were relaxed.
 
 ## Source verification
 
-- Compilation and git diff whitespace checks passed.
-- All **236 tests and 4 subtests passed**, including **19 targeted cleanup tests**.
-- Real temporary-file deletion verified both roots, every subfolder/nested file preserved, no early deletion, once-per-day behavior, active-download waiting, wrong-root refusal and a locked-file failure without deleting unrelated data.
-- Reloaded shared state prevented purged filenames and uncertain crash-time names from being downloaded again. Exact extensions remain distinct; the next day's files are not blocked. Explicit cached-save repair also respects deletion history.
-- Stop/disabled cleanup, midnight rollover, interrupted passes, malformed state, absent/corrupt user settings and overlapping request writers were exercised. Each deletion intention is journaled before unlink. A failed unlink leaves the file and clears its pending name.
-- The real shared WorkerLock coordinated a headless cleanup request with a running monitor fixture. A standalone worker with no GUI also deleted only temporary-root files and removed its transient request.
-- Task registration/update/disable was tested against a fake service, including current-user ownership, matching executable/action, no password and no immediate task execution. Another-machine setup and another-program task were refused.
-- A real local Windows Task Scheduler definition was constructed **in memory only** and verified: daily 22:00+07:00, interactive token, least privilege, no missed-run catch-up, no concurrent instance and --scheduled-cleanup action. No task was registered or run during verification.
-- All **12 source offline checks passed**. The Thai GUI cleanup checkbox, settings collection, 22:00 policy, existing countdown/history controls, Show password, Stop and icon passed.
+- Compilation and whitespace checks passed.
+- All **246 tests and 4 subtests passed**, including **29 targeted cleanup/setup tests**.
+- First registration/update/disable passes for both direct and actual pywintypes wrapped task-not-found errors, using a fake task service with no registration side effects.
+- Error tests cover access denied, malformed/absent excepinfo, structured-args fallback, no parsing of error text and refusal to unwrap unrelated outer errors. Missing-file errors at registration remain stage-specific failures.
+- Existing tests retain exact approved roots, all-folder preservation, locked-file errors, active-account waiting, shared worker locking, headless cleanup, crash/restart behavior and same-day download/repair prevention.
+- All **13 source offline checks passed**, including the new real read-only background-thread Windows lookup. No verification task is registered or launched.
 
 ## Actual portable verification
 
-- The actual **3.6.0 EXE passed all 12 offline checks**, including temporary-root deletion, directory preservation, persistent same-day skip, active-account wait, a subsequent standalone headless cleanup under the real worker lock and the in-memory Windows task definition.
-- The actual Thai GUI passed with daily_cleanup_time=22:00, daily_cleanup_toggle_passed=true, daily_cleanup_preserves_all_folders=true, daily_cleanup_requires_monitor=false and daily_cleanup_skips_deleted_names=true. Monitor and Settings were visually checked.
-- Diagnostic commands accepted PowerShell provider-qualified UNC output paths and exited successfully. Reports include powershell_path_input_verified=true and the actual tested EXE hash.
-- Guide/source hashes match. Portable layout remains only EXE, _internal and Quick start.md. Pinned browser included; OCR absent; no settings, credentials, production files or logs bundled.
+- The actual **3.6.1 EXE passed all 13 offline checks**. Its packaged COM code recognized the real Windows missing-task exception in a background thread. Existing temporary-root cleanup, standalone worker, folder preservation and no-redownload checks passed.
+- The actual Thai GUI passed and Settings was visually inspected: version 3.6.1, 22:00, cleanup toggle, all-folder protection, unchanged history/countdown, Stop, Show password and supplied icon.
+- Diagnostic commands exited successfully and accepted PowerShell provider-qualified UNC report paths. Reports record the tested EXE hash and powershell_path_input_verified=true.
+- The Thai packaged guide matches docs/QUICK_START.md. Portable top level remains EXE, _internal and Quick start.md. Pinned browser included; OCR absent; no credentials, production settings, business files or logs bundled.
 
-Verified EXE SHA-256: `7714ac08faff8f422be035b4aaa0e342a1dbd0b79e131a2f133964e138e717f4`.
+Verified EXE SHA-256: `4cb44e5a72503098df6851801957cc6fe9b53b7d0051934bcc84c00a08f5eca3`.
 
-The verified 3.6.0 bundle replaced 3.5.1 in the normal portable folder. Final EXE and guide hashes match the tested staged bundle. Old/staged releases were removed; one portable folder remains with the three expected top-level items. No application process was terminated for promotion.
+The verified bundle replaced 3.6.0 in the normal portable folder. Final EXE and guide hashes match the tested stage. Old/staged releases were removed, leaving one portable folder. No app process was terminated and user settings/history were preserved.
 
 Supplied icon SHA-256 remains `8ad034733f09aeaca0ca829db1845eb738550f8b6717b574009b9d251060a587`.
 
-## Activation and live boundary
+## Target-machine boundary
 
-Checks ran on **.73** against the project share on **.97**. The attempt to access .97 Task Scheduler remotely returned **Access is denied**. The actual task is therefore **not registered or live-verified by this session**; reports deliberately set daily_cleanup_task_registered_live=false.
+Checks ran on **.73** against the project on **.97**. The exact reported Windows lookup error was reproduced and corrected, but successful live task registration on .97 is not claimed. Remote scheduler access was denied earlier; the updated stable EXE must be reopened on .97 or its Tools setup action invoked to retry local registration. Settings displays the confirmed registration result or the failed operation/code.
 
-Open the updated stable portable once on .97. Outside smoke mode it installs/updates only that signed-in user's SID-named cleanup task and verifies the registered definition. Settings shows success or the registration error; Tools also offers the local setup action. Existing portal credentials are not needed by the headless cleanup action, and no Windows password is stored.
+The task remains 22:00 Bangkok for the signed-in user's interactive token, without a stored password or elevation. It runs with KDE closed when .97 is on and that Windows user signed in; a running monitor cooperates under the existing worker lock. No missed-night catch-up is enabled. Every subfolder and its contents, including 03 Check and Checked, remain protected. Same-day deleted names are not downloaded or repaired back.
 
-The .97 computer must be on and that Windows user signed in, although the screen may be locked. No shutdown/sign-out catch-up is enabled. If KDE owns the shared worker lock at 22:00, the task requests cooperative cleanup and waits for the active account to finish. Otherwise it runs with KDE closed. Disabling the checkbox and saving disables in-app cleanup and removes only the matching own-user task.
-
-**No production files were deleted during development, packaging or task setup.** Production directory names were inspected read-only. Actual .97 share deletion rights and the first live 22:00 run remain unverified. Locked/denied files are not forced; per-root/per-file errors appear in the existing monthly CSV and task failures return nonzero status.
-
-Business roots receive no probes, trackers, logs, temporary sidecars or account folders. Cleanup never recurses or follows links. Log retains existing state/CSV/lock plus a transient coordination request; one overwritten task-result JSON stays in the local settings folder. Existing credentials, business files, logs and unrelated applications were preserved during release work.
+**No production files were deleted, no tasks were registered or run, and no permissions were changed during verification.** Actual .97 deletion rights and the first successful live nightly run remain unverified. Shared logs/state and local credentials were preserved.

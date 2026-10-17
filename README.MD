@@ -1,4 +1,4 @@
-# KDE Download — 3.6.0
+# KDE Download — 3.6.1
 
 Thai Windows GUI with การทำงาน (Monitor), ประวัติการทำงาน (History) and ตั้งค่า (Settings). Open **portable\KDE Bot Download V3.exe**; keep **_internal** beside it. The pinned browser is included. Python and OCR are not required on the deployment computer.
 
@@ -25,6 +25,8 @@ Thai Windows GUI with การทำงาน (Monitor), ประวัติ�
 - .97 must be on and that Windows user signed in; the screen may be locked. There is no missed-night catch-up after shutdown/sign-out. Local task registration status appears in Settings. Uncheck the 22:00 option and save to disable both the timer and that user's task.
 
 Remote Task Scheduler access from the builder was denied. The release is prepared to register locally when opened on .97; live registration and real business-file deletion are not claimed by offline verification.
+
+Version 3.6.1 fixes first-time setup when Windows wraps the expected task-not-found code `0x80070002` inside a COM dispatch exception. Lookup then continues to registration; other errors identify the failed setup stage and Windows code.
 
 The reported RuntimeError was found in the shared log: the old complete-catalogue page limit stopped downloads before they began. The new forward page processor starts saving immediately, derives traversal room from pagination totals with a safe fallback, detects unchanged/repeated pages and preserves already-saved files on later errors. A regression reproduces 77 rows with the old max_pages=1 setting.
 
