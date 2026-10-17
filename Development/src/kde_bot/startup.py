@@ -13,6 +13,7 @@ RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
 KNOWN_EXECUTABLES = (
     r"\\10.0.0.97\kumashare\Z AI\Projects\KDE_Bot_Download_V3\portable\KDE Bot Download V3.exe",
     r"\\10.0.0.97\kuma$\Z\Projects\KDE_Bot_Download_V3\portable\KDE Bot Download V3.exe",
+    r"\\10.0.0.97\kuma$\Z\Projects\KDE_Bot_Download_V3\Program\KDE Bot Download V3.exe",
 )
 
 
@@ -32,8 +33,8 @@ def configure_startup(enabled, executable=None):
     executable = Path(executable or sys.executable).resolve()
     if not on_cleanup_machine():
         return 'การเริ่มพร้อม Windows ตั้งค่าเมื่อเปิดโปรแกรมบนเครื่อง .97'
-    if not getattr(sys, 'frozen', False) or executable.parent.name != 'portable' or executable.name != 'KDE Bot Download V3.exe':
-        return 'การเริ่มพร้อม Windows ใช้งานจากโปรแกรมในโฟลเดอร์ portable'
+    if not getattr(sys, 'frozen', False) or executable.parent.name.casefold() not in {'program', 'portable'} or executable.name != 'KDE Bot Download V3.exe':
+        return 'การเริ่มพร้อม Windows ใช้งานจากโปรแกรมในโฟลเดอร์ Program'
     command = subprocess.list2cmdline([str(executable), '--background'])
     with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
         try:

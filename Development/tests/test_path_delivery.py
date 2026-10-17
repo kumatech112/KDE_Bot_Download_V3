@@ -71,9 +71,10 @@ def test_daily_publication_uses_verified_243_before_97_and_recovers(setup, tmp_p
 
 
 @pytest.mark.parametrize('enabled', [True, False])
-def test_startup_migrates_only_known_own_legacy_command(enabled):
+@pytest.mark.parametrize('current_index', [1, 2])
+def test_startup_migrates_only_known_own_legacy_command(enabled, current_index):
     import winreg
-    executable = Path(KNOWN_EXECUTABLES[1])
+    executable = Path(KNOWN_EXECUTABLES[current_index])
     old_command = subprocess.list2cmdline([KNOWN_EXECUTABLES[0], '--background'])
     with patch('kde_bot.cleanup_task.on_cleanup_machine', return_value=True), \
             patch('kde_bot.startup.sys.frozen', True, create=True), \

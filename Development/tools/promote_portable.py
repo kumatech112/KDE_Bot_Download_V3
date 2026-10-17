@@ -1,4 +1,4 @@
-"""Promote a tested KDE release and remove only explicitly identified old bundles."""
+"""Promote a tested KDE release to Program and archive the previous bundle."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ import shutil
 import subprocess
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
+REPORTS = ROOT / "Archive/verification"
 EXE = "KDE Bot Download V3.exe"
 ALLOWED_TOP_LEVEL = {EXE, "_internal", "Quick start.md"}
 LEGACY_TOP_LEVEL = {EXE, "_internal", "คู่มือเริ่มใช้งาน.md"}
@@ -24,8 +25,12 @@ def digest(path: Path) -> str:
 
 def validate_bundle(path: Path, expected_hash: str) -> Path:
     resolved = path.resolve(strict=True)
-    if resolved.parent != ROOT.resolve() or resolved.name not in {"portable", ".previous-portable"} and not re.fullmatch(r"portable-\d{8}-\d{6}", resolved.name):
-        raise ValueError("Bundle must be a directly contained KDE portable directory")
+    project = ROOT.resolve()
+    stable = resolved.parent == project and resolved.name in {'Program', 'portable'}
+    staged = resolved.parent == (project / 'Archive/builds') and re.fullmatch(r"portable-\d{8}-\d{6}", resolved.name)
+    archived = resolved.parent == (project / 'Archive/releases') and re.fullmatch(r"KDE-\d+\.\d+\.\d+-[0-9a-f]{12}", resolved.name)
+    if not (stable or staged or archived):
+        raise ValueError("Bundle must be the stable Program or an explicitly contained Archive bundle")
     if {item.name for item in resolved.iterdir()} not in (ALLOWED_TOP_LEVEL, LEGACY_TOP_LEVEL):
         raise ValueError("Unexpected files in portable; preserve them before replacing the release")
     if digest(resolved / EXE) != expected_hash.casefold():
@@ -39,6 +44,11 @@ def validate_bundle(path: Path, expected_hash: str) -> Path:
 
 
 def reject_running_bundle(path: Path) -> None:
+    import win32con
+    import win32file
+    handle = win32file.CreateFile(str(path / EXE), win32con.GENERIC_READ, 0, None,
+                                 win32con.OPEN_EXISTING, win32con.FILE_ATTRIBUTE_NORMAL, None)
+    handle.Close()  # Read-only exclusive open also detects another machine's SMB lock.
     executable = str(path / EXE).replace("'", "''")
     command = "$ErrorActionPreference='Stop'; @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq '" + executable + "' }).Count"
     environment = os.environ.copy()
@@ -55,15 +65,17 @@ def reject_running_bundle(path: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-old-sha", required=True)
+    parser.add_argument("--old-version", required=True)
+    parser.add_argument("--old-folder", choices=('Program', 'portable'), default='Program')
     parser.add_argument("--discard-build", action="append", default=[], help="directory=known-executable-SHA256")
     arguments = parser.parse_args()
-    metadata_path = ROOT / "docs/verification/build.json"
+    metadata_path = REPORTS / "build.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     candidate = validate_bundle(Path(metadata["exe"]).parent, metadata["sha256"])
-    if candidate.name == "portable":
+    if candidate.parent != (ROOT / "Archive/builds").resolve():
         raise ValueError("The replacement must be staged before promotion")
     for name in ("packaged-check-3.1.json", "gui-3.1.json", f"background-{metadata['version']}.json"):
-        report = json.loads((ROOT / "docs/verification" / name).read_text(encoding="utf-8"))
+        report = json.loads((REPORTS / name).read_text(encoding="utf-8"))
         if report.get("exe_sha256") != metadata["sha256"] or report.get("live_portal_access") is not False:
             raise ValueError("Actual executable verification is missing or belongs to another bundle")
         if not name.startswith('background') and (report.get('delivery_order') != ['original_dir', 'new_dir']
@@ -94,38 +106,58 @@ def main() -> int:
                                        or report.get('editable_timing_roundtrip') is not True or report.get('save_without_start_passed') is not True
                                        or report.get('tracking_pause') != '22:00' or report.get('tracking_resume') != '05:00'):
             raise ValueError("Packaged GUI verification failed")
-    old = validate_bundle(ROOT / "portable", arguments.expected_old_sha)
+    old = validate_bundle(ROOT / arguments.old_folder, arguments.expected_old_sha)
     reject_running_bundle(old)
     reject_running_bundle(candidate)
     discarded = []
     for specification in arguments.discard_build:
         name, expected_hash = specification.split("=", 1)
         stale = validate_bundle(ROOT / name, expected_hash)
-        if stale in {old, candidate} or stale.name == ".previous-portable":
+        if stale in {old, candidate} or stale.parent != (ROOT / "Archive/builds").resolve():
             raise ValueError("Discard list overlaps the current or replacement bundle")
         reject_running_bundle(stale)
         discarded.append((stale, expected_hash))
-    previous = ROOT / ".previous-portable"
+    if not re.fullmatch(r"\d+\.\d+\.\d+", arguments.old_version):
+        raise ValueError('Use a numeric old release version')
+    releases = ROOT / 'Archive/releases'
+    releases.mkdir(parents=True, exist_ok=True)
+    previous = releases / ('KDE-' + arguments.old_version + '-' + arguments.expected_old_sha[:12].casefold())
+    if not previous.resolve().is_relative_to(ROOT.resolve()) or previous.resolve().parent != releases.resolve():
+        raise ValueError('Archive destination escaped the KDE project')
     if previous.exists():
-        raise FileExistsError("A previous promotion needs cleanup; preserve it before another promotion")
+        raise FileExistsError('The identified old release is already archived; no overwrite')
+    program = ROOT / 'Program'
+    if program.exists() and program != old:
+        raise FileExistsError('Program already contains another bundle; no overwrite')
+    launcher = ROOT / 'KDE Bot Download V3.lnk'
+    prior_launcher = launcher.read_bytes() if launcher.exists() else None
     os.rename(old, previous)
     try:
-        os.rename(candidate, ROOT / "portable")
+        os.rename(candidate, program)
+        from create_shortcut import create_shortcut
+        create_shortcut(ROOT)
     except Exception:
+        if program.exists():
+            os.rename(program, candidate)
         os.rename(previous, old)
+        if prior_launcher is None:
+            launcher.unlink(missing_ok=True)
+        else:
+            launcher.write_bytes(prior_launcher)
         raise
-    metadata["exe"] = str(ROOT / "portable" / EXE)
+    metadata["exe"] = str(program / EXE)
+    metadata['previous_release'] = str(previous)
     metadata["status"] = "verified_and_promoted"
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     # User-authorized old KDE bundles only. Every absolute target was validated
     # before renaming or removal; settings, logs and other applications lie outside.
     validate_bundle(previous, arguments.expected_old_sha)
-    shutil.rmtree(previous)
+    # Preserve the former release, byte for byte, in Archive for rollback.
     for stale, expected_hash in discarded:
         validate_bundle(stale, expected_hash)
         shutil.rmtree(stale)
     print(json.dumps({"status": "promoted", "exe": metadata["exe"], "sha256": metadata["sha256"],
-                      "old_release_removed": True, "discarded_builds": [str(path) for path, _ in discarded]}))
+                      "old_release_archived": str(previous), "discarded_builds": [str(path) for path, _ in discarded]}))
     return 0
 
 

@@ -1,3 +1,9 @@
+# KDE Bot Download V3 — 3.8.2
+
+- Organize the project as Program / Development / Archive, following MPFM. Add a root shortcut and concise Thai README.
+- Move source, tools, tests, assets and detailed documentation under Development. Keep build staging, verification evidence and the previous complete release under Archive.
+- Update builder/promotion paths and the stable Program startup alias; retain exact-command ownership checks, no-overwrite and rollback safeguards. Keep .243-first/.97-copy, existing credentials/logs, timing and cleanup behavior unchanged.
+
 # KDE Bot Download V3 — 3.8.1
 
 - Follow the user-created shares: .97 copies in `\\10.0.0.97\Z KDE Bot`; existing history/queue in `\\10.0.0.97\Z Log Bot\KDE Log Bot`.

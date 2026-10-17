@@ -75,8 +75,8 @@ def configure_task(enabled, executable=None):
     if not on_cleanup_machine():
         return {'installed': False, 'message': 'ลงทะเบียนงานลบเวลา 22:00 โดยเปิดโปรแกรมที่เครื่อง .97 หนึ่งครั้ง'}
     executable = Path(executable or sys.executable).resolve(strict=True)
-    if not getattr(sys, 'frozen', False) or executable.name != 'KDE Bot Download V3.exe' or executable.parent.name.casefold() != 'portable':
-        raise RuntimeError('กรุณาเปิดโปรแกรม EXE จากโฟลเดอร์ portable เพื่อลงทะเบียนงานลบไฟล์')
+    if not getattr(sys, 'frozen', False) or executable.name != 'KDE Bot Download V3.exe' or executable.parent.name.casefold() not in {'program', 'portable'}:
+        raise RuntimeError('กรุณาเปิดโปรแกรม EXE จากโฟลเดอร์ Program เพื่อลงทะเบียนงานลบไฟล์')
     import pythoncom
     import win32api
     import win32con

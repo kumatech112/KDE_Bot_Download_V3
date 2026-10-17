@@ -15,6 +15,7 @@ from datetime import datetime
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = ROOT.parent
 NAME = "KDE Bot Download V3"
 
 
@@ -85,12 +86,9 @@ def main() -> int:
         f"/out:{driver / 'node.exe'}", str(ROOT / "tools/playwright_node_gui_launcher.cs"),
     ], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
     shutil.copy2(ROOT / "docs/QUICK_START.md", distribution / "Quick start.md")
-    destination = ROOT / "portable"
-    if destination.exists():
-        if any(destination.iterdir()):
-            destination = ROOT / ("portable-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
-        else:
-            destination.rmdir()
+    builds = PROJECT_ROOT / 'Archive/builds'
+    builds.mkdir(parents=True, exist_ok=True)
+    destination = builds / ("portable-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
     shutil.copytree(distribution, destination)
     executable = destination / f"{NAME}.exe"
     evidence = {
@@ -100,7 +98,7 @@ def main() -> int:
         "bundled_browser": True, "bundled_ocr": False, "contains_credentials": False,
         "icon_sha256": hashlib.sha256(icon.read_bytes()).hexdigest(),
     }
-    verification = ROOT / "docs/verification"
+    verification = PROJECT_ROOT / "Archive/verification"
     verification.mkdir(parents=True, exist_ok=True)
     (verification / "build.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(evidence, ensure_ascii=False))

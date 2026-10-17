@@ -46,7 +46,7 @@ def wait_until(predicate, process, seconds=20):
 def verify(executable, output):
     if executable.name != 'KDE Bot Download V3.exe':
         raise ValueError('Select the KDE executable under test')
-    if on_cleanup_machine() and executable.parent.name.casefold() == 'portable':
+    if on_cleanup_machine() and executable.parent.name.casefold() in {'program', 'portable'}:
         raise ValueError('On .97, use a staged bundle so checks cannot alter production startup/task settings')
     result = {'exe_sha256': hashlib.sha256(executable.read_bytes()).hexdigest(),
               'live_portal_access': False, 'business_files_modified': False,

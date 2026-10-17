@@ -1,4 +1,23 @@
-# KDE 3.8.1 data flow and changed functions
+# KDE 3.8.2 data flow and changed functions
+
+## 3.8.2 organized project layout
+
+The root now mirrors MPFM: Program is the active portable; Development contains all original source/tests/tools/assets/docs/dependency files; Archive contains original verification files, build staging and preserved prior releases. Git metadata remains at the root. A root Windows shortcut launches Program with Program as its working directory. Runtime credentials remain in LocalAppData and shared downloads/history remain at their configured UNC destinations. The mail → current-day sequential portal → .243 → .97 data flow is unchanged.
+
+| File | Function | Change |
+|---|---|---|
+| tools/build_portable.py | source_version, main | Read Development source; stage bundles in Archive/builds and record Archive/verification evidence |
+| tools/promote_portable.py | validate_bundle | Admit only Program, transitional portable, named Archive/builds and Archive/releases; preserve containment/link/hash checks |
+| tools/promote_portable.py | reject_running_bundle | Read-only exclusive EXE open detects SMB locks in addition to local running-process check |
+| tools/promote_portable.py | main | Validate candidate reports; archive identified old release; install Program; create launcher; roll back paths/launcher on installation failure; restrict optional discard to build staging |
+| tools/create_shortcut.py | create_shortcut | Create and read back only the own root shortcut, with Program target/working directory; preserve conflicting shortcuts |
+| startup.py | KNOWN_EXECUTABLES, configure_startup | Recognize Program and migrate only exact known legacy own startup commands on .97 |
+| cleanup_task.py | configure_task | Recognize stable Program for best-effort retirement of own legacy task |
+| tools/verify_background.py | verify | Treat Program as production on .97 and require staged isolated lifecycle checks there |
+| tests/test_path_delivery.py | test_startup_migrates_only_known_own_legacy_command | Check both legacy portable and new Program alias using mock registry |
+| tests/test_project_layout.py | load_tool, test_promotion_accepts_only_designated_bundle_locations, test_promotion_rejects_unapproved_locations_before_touching_files | Import moved tools; verify allowed root/archive boundaries and reject wrong hashes/outside folders |
+
+The old bundle is fingerprinted before moving and verified in Archive afterward. Source files are tracked as Git renames. No business files, live history, credentials, MPFM files or permissions are changed. Historical path references in earlier release notes below are retained as historical evidence; Program and Archive supersede their portable/docs-verification locations.
 
 ## 3.8.1 new shares and .243-first delivery
 

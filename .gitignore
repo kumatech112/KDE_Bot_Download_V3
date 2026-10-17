@@ -17,3 +17,8 @@ KDE_Log_*.csv
 .kde.lock
 docs/verification/
 Thumbs.db
+
+/Program/
+/Archive/
+/KDE Bot Download V3.lnk
+/Development/docs/verification/
